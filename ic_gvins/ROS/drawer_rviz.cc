@@ -37,11 +37,11 @@ DrawerRviz::DrawerRviz(ros::NodeHandle &nh)
 
     frame_id_ = "world";
 
-    pose_pub_           = nh.advertise<nav_msgs::Odometry>("pose", 2);
-    path_pub_           = nh.advertise<nav_msgs::Path>("path", 2);
-    track_image_pub_    = nh.advertise<sensor_msgs::Image>("tracking", 2);
-    fixed_points_pub_   = nh.advertise<sensor_msgs::PointCloud>("fixed", 2);
-    current_points_pub_ = nh.advertise<sensor_msgs::PointCloud>("current", 2);
+    pose_pub_           = nh.advertise<nav_msgs::Odometry>("pose", 2);//位姿
+    path_pub_           = nh.advertise<nav_msgs::Path>("path", 2);//路径
+    track_image_pub_    = nh.advertise<sensor_msgs::Image>("tracking", 2);//跟踪图像
+    fixed_points_pub_   = nh.advertise<sensor_msgs::PointCloud>("fixed", 2);//固定的点云数据
+    current_points_pub_ = nh.advertise<sensor_msgs::PointCloud>("current", 2);//当前的点云数据
 }
 
 void DrawerRviz::setFinished() {
@@ -74,6 +74,7 @@ void DrawerRviz::run() {
     }
 }
 
+//用于接收和处理新的帧数据，然后准备将其发布到ROS系统中。
 void DrawerRviz::updateFrame(Frame::Ptr frame) {
     std::unique_lock<std::mutex> lock(image_mutex_);
 
@@ -83,6 +84,7 @@ void DrawerRviz::updateFrame(Frame::Ptr frame) {
     update_sem_.notify_one();
 }
 
+//用于更新系统中与地图点相关的跟踪数据。
 void DrawerRviz::updateTrackedMapPoints(vector<cv::Point2f> map, vector<cv::Point2f> matched,
                                         vector<MapPointType> mappoint_type) {
     std::unique_lock<std::mutex> lock(image_mutex_);
@@ -91,12 +93,14 @@ void DrawerRviz::updateTrackedMapPoints(vector<cv::Point2f> map, vector<cv::Poin
     mappoint_type_ = std::move(mappoint_type);
 }
 
+//用于更新系统中当前帧和参考帧之间的跟踪点。
 void DrawerRviz::updateTrackedRefPoints(vector<cv::Point2f> ref, vector<cv::Point2f> cur) {
     std::unique_lock<std::mutex> lock(image_mutex_);
     pts2d_ref_ = std::move(ref);
     pts2d_cur_ = std::move(cur);
 }
 
+//用于将跟踪图像发布到ROS的主题中，以便其他节点可以订阅和使用该图像数据。该方法从内部存储的原始图像数据生成跟踪图像，并将其转换为ROS消息格式，然后发布出去。
 void DrawerRviz::publishTrackingImage() {
     std::unique_lock<std::mutex> lock(image_mutex_);
 
@@ -119,6 +123,7 @@ void DrawerRviz::publishTrackingImage() {
     track_image_pub_.publish(image);
 }
 
+//用于发布地图点云数据到ROS中的两个不同的点云主题(current_points_pub_ 和 fixed_points_pub_)。这些点云数据用于在可视化工具中显示当前的路标点和新的地图点。
 void DrawerRviz::publishMapPoints() {
     std::unique_lock<std::mutex> lock(map_mutex_);
 
@@ -162,6 +167,7 @@ void DrawerRviz::publishMapPoints() {
     fixed_mappoints_.clear();
 }
 
+//用于发布里程计数据 (Odometry) 到 ROS 中的对应主题，并将里程计路径 (Path) 更新发布。
 void DrawerRviz::publishOdometry() {
     std::unique_lock<std::mutex> lock(map_mutex_);
 
@@ -170,7 +176,7 @@ void DrawerRviz::publishOdometry() {
     auto quaternion = Rotation::matrix2quaternion(pose_.R);
     auto stamp      = ros::Time::now();
 
-    // Odometry
+    // Odometry  构建并发布里程计数据，包括位置和姿态信息
     odometry.header.stamp            = stamp;
     odometry.header.frame_id         = frame_id_;
     odometry.pose.pose.position.x    = pose_.t.x();
@@ -182,7 +188,7 @@ void DrawerRviz::publishOdometry() {
     odometry.pose.pose.orientation.w = quaternion.w();
     pose_pub_.publish(odometry);
 
-    // Path
+    // Path  更新并发布路径信息，记录机器人的轨迹
     geometry_msgs::PoseStamped pose_stamped;
     pose_stamped.header.stamp    = stamp;
     pose_stamped.header.frame_id = frame_id_;
@@ -200,6 +206,7 @@ void DrawerRviz::addNewFixedMappoint(Vector3d point) {
     fixed_mappoints_.push_back(point);
 }
 
+//用于更新机器人的姿态信息和标记地图更新状态
 void DrawerRviz::updateMap(const Eigen::Matrix4d &pose) {
     std::unique_lock<std::mutex> lock(map_mutex_);
 
