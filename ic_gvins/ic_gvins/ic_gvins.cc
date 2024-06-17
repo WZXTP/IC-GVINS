@@ -43,11 +43,14 @@
 #include <ceres/ceres.h>
 #include <yaml-cpp/yaml.h>
 
+//系统初始化了一个 INS-Centric GNSS-Visual-Inertial Navigation System (GVINS)，
+//配置和设置了系统的各个组件
 GVINS::GVINS(const string &configfile, const string &outputpath, Drawer::Ptr drawer) {
+    //初始化状态
     gvinsstate_ = GVINS_ERROR;
 
     // 加载配置
-    // Load configuration
+    // Load configuration，尝试加载 YAML 格式的配置文件。如果加载失败，输出错误消息并返回。
     YAML::Node config;
     std::vector<double> vecdata;
     try {
@@ -59,6 +62,9 @@ GVINS::GVINS(const string &configfile, const string &outputpath, Drawer::Ptr dra
 
     // 文件IO
     // Output files
+    //初始化输出文件
+    //使用 FileSaver 创建不同的数据保存文件，以保存导航数据、地图点、统计数据、外参数据、IMU 误差和轨迹数据。
+    //如果文件打开失败，记录错误日志并返回。将配置文件的内容备份到输出路径中。
     navfilesaver_    = FileSaver::create(outputpath + "/gvins.nav", 11);
     ptsfilesaver_    = FileSaver::create(outputpath + "/mappoint.txt", 3);
     statfilesaver_   = FileSaver::create(outputpath + "/statistics.txt", 3);
@@ -71,20 +77,24 @@ GVINS::GVINS(const string &configfile, const string &outputpath, Drawer::Ptr dra
         return;
     }
 
+    //复制配置文件
     // Make a copy of configuration file to the output directory
     std::ofstream ofconfig(outputpath + "/gvins.yaml");
     ofconfig << YAML::Dump(config);
     ofconfig.close();
 
-    initlength_       = config["initlength"].as<int>();
-    imudatarate_      = config["imudatarate"].as<double>();
-    imudatadt_        = 1.0 / imudatarate_;
-    reserved_ins_num_ = 2;
+    //初始化系统参数
+    //Initialize system parameters
+    initlength_       = config["initlength"].as<int>();//初始化长度
+    imudatarate_      = config["imudatarate"].as<double>();//IMU数据速率和时间间隔
+    imudatadt_        = 1.0 / imudatarate_;//IMU数据的时间间隔 imudatadt_ 根据IMU数据率计算
+    reserved_ins_num_ = 2;//保存INS数据的数量
 
     // 安装参数
     // Installation parameters
     vecdata   = config["antlever"].as<std::vector<double>>();
     antlever_ = Vector3d(vecdata.data());
+    //天线杠杆臂参数 antlever_ 从配置文件中读取，并转换为 Eigen 向量。
 
     // IMU噪声参数
     // IMU parameters
@@ -95,21 +105,25 @@ GVINS::GVINS(const string &configfile, const string &outputpath, Drawer::Ptr dra
     integration_parameters_->acc_bias_std = config["imumodel"]["abstd"].as<double>() * 1.0e-5;
     integration_parameters_->corr_time    = config["imumodel"]["corrtime"].as<double>() * 3600;
     integration_parameters_->gravity      = NORMAL_GRAVITY;
+    //使用配置文件中的数据初始化 IMU 的噪声模型参数，
+    //包括角速度随机游走 (gyr_arw)、陀螺仪偏置标准差 (gyr_bias_std)、加速度计随机游走 (acc_vrw)、加速度计偏置标准差 (acc_bias_std) 等。
 
+    //整合配置
+    //integration_config_ 中的参数，如是否考虑地球自转 (iswithearth) 及重力值等，也根据配置文件进行初始化。
     integration_config_.iswithearth = config["iswithearth"].as<bool>();
     integration_config_.isuseodo    = false;
     integration_config_.iswithscale = false;
     integration_config_.gravity     = {0, 0, integration_parameters_->gravity};
 
     // 初始值, 后续根据GNSS定位实时更新
-    // GNSS variables intializaiton
+    // GNSS variables intializaiton，初始化GNSS变量
     integration_config_.origin.setZero();
     last_gnss_.blh.setZero();
     gnss_.blh.setZero();
 
     preintegration_options_ = Preintegration::getOptions(integration_config_);
 
-    // 相机参数
+    // 初始化相机参数
     // Camera parameters
     vector<double> intrinsic  = config["cam0"]["intrinsic"].as<std::vector<double>>();
     vector<double> distortion = config["cam0"]["distortion"].as<std::vector<double>>();
@@ -117,7 +131,7 @@ GVINS::GVINS(const string &configfile, const string &outputpath, Drawer::Ptr dra
 
     camera_ = Camera::createCamera(intrinsic, distortion, resolution);
 
-    // IMU和Camera外参
+    // 初始化IMU和Camera外参
     // Extrinsic parameters
     vecdata           = config["cam0"]["q_b_c"].as<std::vector<double>>();
     Quaterniond q_b_c = Eigen::Quaterniond(vecdata.data());
@@ -140,16 +154,16 @@ GVINS::GVINS(const string &configfile, const string &outputpath, Drawer::Ptr dra
     // Reprojection std
     optimize_reprojection_error_std_ = reprojection_error_std_ / camera_->focalLength();
 
-    // 可视化
+    // 初始化可视化参数
     is_use_visualization_ = config["is_use_visualization"].as<bool>();
 
-    // Initialize the containers
+    // Initialize the containers，初始化容器
     preintegrationlist_.clear();
     statedatalist_.clear();
     gnsslist_.clear();
     timelist_.clear();
 
-    // GVINS fusion objects
+    // GVINS fusion objects，初始化GVINS对象
     map_    = std::make_shared<Map>(optimize_windows_size_);
     drawer_ = std::move(drawer);
     drawer_->setMap(map_);
@@ -158,22 +172,25 @@ GVINS::GVINS(const string &configfile, const string &outputpath, Drawer::Ptr dra
     }
     tracking_ = std::make_shared<Tracking>(camera_, map_, drawer_, configfile, outputpath);
 
-    // Process threads
+    // Process threads，启动处理线程
     fusion_thread_       = std::thread(&GVINS::runFusion, this);
     tracking_thread_     = std::thread(&GVINS::runTracking, this);
     optimization_thread_ = std::thread(&GVINS::runOptimization, this);
 
+    //设置初始状态
     gvinsstate_ = GVINS_INITIALIZING;
 }
 
+//用于向 IMU 数据缓冲区添加新的 IMU 数据，并在必要时填充丢失的数据。
 bool GVINS::addNewImu(const IMU &imu) {
     if (imu_buffer_mutex_.try_lock()) {
+        //检查 IMU 数据时间间隔
         if (imu.dt > (imudatadt_ * 1.5)) {
-            LOGE << absl::StrFormat("Lost IMU data with at %0.3lf dt %0.3lf", imu.time, imu.dt);
+            LOGE << absl::StrFormat("Lost IMU data with at %0.3lf dt %0.3lf", imu.time, imu.dt);//记录 IMU 数据丢失的日志
 
-            long cnts = lround(imu.dt / imudatadt_) - 1;
+            long cnts = lround(imu.dt / imudatadt_) - 1;//计算需要插入的额外 IMU 数据数量 cnts。
 
-            IMU imudata  = imu;
+            IMU imudata  = imu;//创建一个临时的 IMU 数据副本 imudata
             imudata.time = imu.time - imu.dt;
             while (cnts--) {
                 imudata.time += imudatadt_;
@@ -189,6 +206,7 @@ bool GVINS::addNewImu(const IMU &imu) {
         // Release fusion semaphore
         fusion_sem_.notify_one();
 
+        //释放互斥锁并返回
         imu_buffer_mutex_.unlock();
         return true;
     }
@@ -196,37 +214,40 @@ bool GVINS::addNewImu(const IMU &imu) {
     return false;
 }
 
+//用于处理新接收到的 GNSS 数据，并根据 GNSS 信息更新系统中的一些重要参数，如局部重力和 GNSS 位置信息。
 bool GVINS::addNewGnss(const GNSS &gnss) {
     // 低频观测, 无需加锁
 
     // 根据GNSS定位更新重力常量
     // Update the gravity from GNSS
     if (integration_config_.origin.isZero()) {
-        // 站心原点
-        // The origin of the world frame
+        // 站心原点，初始化原点和重力
+        // The origin of the world frame，局部坐标系的原点
         integration_config_.origin       = gnss.blh;
         integration_parameters_->gravity = Earth::gravity(gnss.blh);
         LOGI << "Local gravity is initialized as " << Logging::doubleData(integration_parameters_->gravity);
-    } else {
+    } else {//更新历史 GNSS 数据
         last_last_gnss_ = last_gnss_;
         last_gnss_      = gnss_;
     }
 
-    gnss_        = gnss;
-    gnss_.blh    = Earth::global2local(integration_config_.origin, gnss_.blh);
-    isgnssready_ = true;
+    //处理新的 GNSS 数据
+    gnss_        = gnss;//存储当前 GNSS 数据
+    gnss_.blh    = Earth::global2local(integration_config_.origin, gnss_.blh);//转换 GNSS 坐标
+    isgnssready_ = true;//标记 GNSS 数据已准备好
 
     return true;
 }
 
+//用于处理和管理新接收到的视觉帧数据
 bool GVINS::addNewFrame(const Frame::Ptr &frame) {
-    if (gvinsstate_ > GVINS_INITIALIZING_INS) {
-        if (frame_buffer_mutex_.try_lock()) {
-            frame_buffer_.push(frame);
+    if (gvinsstate_ > GVINS_INITIALIZING_INS) {//检查系统状态
+        if (frame_buffer_mutex_.try_lock()) {//尝试获取互斥锁
+            frame_buffer_.push(frame);//添加新帧到缓冲区
 
-            tracking_sem_.notify_one();
+            tracking_sem_.notify_one();//通知追踪线程
 
-            frame_buffer_mutex_.unlock();
+            frame_buffer_mutex_.unlock();//释放互斥锁
             return true;
         }
         return false;
@@ -234,18 +255,20 @@ bool GVINS::addNewFrame(const Frame::Ptr &frame) {
     return true;
 }
 
+//用于处理 IMU 数据的融合和状态更新。runFusion() 方法是一个在单独的线程中运行的函数，负责处理 IMU 数据、执行惯性导航状态估计、GNSS 数据融合以及状态更新。
 void GVINS::runFusion() {
     IMU imu_pre, imu_cur;
     IntegrationState state;
     Frame::Ptr frame;
 
+    //线程启动和初始化
     LOGI << "Fusion thread is started";
     while (!isfinished_) { // While
         Lock lock(fusion_mutex_);
         fusion_sem_.wait(lock);
 
         // 获取所有有效数据
-        // Process all IMU data
+        // Process all IMU data，处理IMU数据
         while (!imu_buffer_.empty()) { // IMU BUFFER
             // 读取IMU缓存
             // Load an IMU sample
@@ -256,7 +279,7 @@ void GVINS::runFusion() {
                 imu_buffer_.pop();
             }
 
-            // INS机械编排及INS处理
+            // INS机械编排及INS处理，状态更新
             // INS mechanization
             { // INS
                 Lock lock3(ins_mutex_);
@@ -271,7 +294,7 @@ void GVINS::runFusion() {
                 if (gvinsstate_ > GVINS_INITIALIZING) {
                     if (isoptimized_ && state_mutex_.try_lock()) {
                         // 优化求解结束, 需要更新IMU误差重新积分
-                        // When the optimization is finished
+                        // When the optimization is finished，如果优化完成，则进行重新积分
                         isoptimized_ = false;
 
                         state = Preintegration::stateFromData(statedatalist_.back(), preintegration_options_);
@@ -286,7 +309,7 @@ void GVINS::runFusion() {
                         ins_window_.back().second = state;
                     }
                 } else {
-                    // Only reserve certain INS in the window during initialization
+                    // Only reserve certain INS in the window during initialization，在初始化期间只保留一定数量的 INS 窗口
                     if (ins_window_.size() > MAXIMUM_INS_NUMBER) {
                         ins_window_.pop_front();
                     }
@@ -294,15 +317,15 @@ void GVINS::runFusion() {
 
                 // 融合状态
                 // Fusion process
-                if (gvinsstate_ == GVINS_INITIALIZING) {
+                if (gvinsstate_ == GVINS_INITIALIZING) {//初始化状态，进行 GVINS 初始化
                     if (isgnssready_ && state_mutex_.try_lock()) {
                         // 初始化参数
-                        // GVINS initialization using GNSS/INS initialization
+                        // GVINS initialization using GNSS/INS initialization，GVINS初始化使用GNSS/INS初始化
                         if (gvinsInitialization()) {
                             gvinsstate_ = GVINS_INITIALIZING_INS;
 
                             // 初始化时需要重新积分
-                            // Redo INS mechanization
+                            // Redo INS mechanization，重做INS机械化
                             isoptimized_ = true;
                         }
                         isgnssready_ = false;
@@ -310,16 +333,16 @@ void GVINS::runFusion() {
                         state_mutex_.unlock();
                         continue;
                     }
-                } else if (gvinsstate_ == GVINS_INITIALIZING_INS) {
+                } else if (gvinsstate_ == GVINS_INITIALIZING_INS) {//初始化 INS 状态，等待新的 GNSS 数据来进行优化
                     // 新的GNSS观测到来, 进行优化
-                    // New GNSS, do GNSS/INS integration
+                    // New GNSS, do GNSS/INS integration，新的GNSS，进行GNSS/INS集成
                     if (isgnssready_ && state_mutex_.try_lock()) {
                         // 需要保证数据对齐, 否则等待
-                        // For data align
+                        // For data align，用于数据对齐
                         if (gnss_.time < ins_window_.back().first.time) {
 
                             // 加入新的GNSS节点
-                            // Add a new GNSS time node
+                            // Add a new GNSS time node，添加新的GNSS时间节点
                             addNewGnssTimeNode();
 
                             isgnssready_ = false;
@@ -328,9 +351,9 @@ void GVINS::runFusion() {
                         }
                         state_mutex_.unlock();
                     }
-                } else if (gvinsstate_ == GVINS_INITIALIZING_VIO) {
+                } else if (gvinsstate_ == GVINS_INITIALIZING_VIO) {//在视觉初始化阶段，仅添加关键帧节点，不进行优化
                     // 仅加入关键帧节点, 而不进行优化
-                    // Add new time node during the initialization of the visual system
+                    // Add new time node during the initialization of the visual system，在可视化系统初始化过程中添加新的时间节点
                     if ((isframeready_ || isgnssready_) && state_mutex_.try_lock()) {
                         if (isframeready_ && (keyframes_.front()->stamp() < ins_window_.back().first.time)) {
                             addNewKeyFrameTimeNode();
@@ -350,7 +373,7 @@ void GVINS::runFusion() {
 
                         state_mutex_.unlock();
                     }
-                } else if (gvinsstate_ >= GVINS_TRACKING_INITIALIZING) {
+                } else if (gvinsstate_ >= GVINS_TRACKING_INITIALIZING) {//跟踪初始化阶段，处理视觉数据和 GNSS 数据
                     if ((isframeready_ || isgnssready_) && state_mutex_.try_lock()) {
                         if (isframeready_ && (keyframes_.front()->stamp() < ins_window_.back().first.time)) {
                             addNewKeyFrameTimeNode();
@@ -370,7 +393,7 @@ void GVINS::runFusion() {
 
                         state_mutex_.unlock();
 
-                        // Release the optimization semaphore
+                        // Release the optimization semaphore，释放优化信号量
                         if (isvisualobs_) {
                             optimization_sem_.notify_one();
                         }
@@ -379,7 +402,7 @@ void GVINS::runFusion() {
 
                 // 用于输出
                 // For output only
-                state = ins_window_.back().second;
+                state = ins_window_.back().second;//状态更新和循环控制
             } // INS
 
             // 总是输出最新的INS机械编排结果, 不占用INS锁
@@ -392,48 +415,49 @@ void GVINS::runFusion() {
     }     // While
 }
 
+//GVINS 系统的核心优化线程，它负责对融合后的数据进行优化，处理 GNSS 和视觉观测数据，并执行必要的边缘化操作以维护系统的稳定和性能
 void GVINS::runOptimization() {
 
-    TimeCost timecost, timecost2;
+    TimeCost timecost, timecost2;//用于计时，评估优化过程的时间成本
 
-    LOGI << "Optimization thread is started";
+    LOGI << "Optimization thread is started";//打印日志信息，表明优化线程已启动
     while (!isfinished_) {
-        Lock lock(optimization_mutex_);
-        optimization_sem_.wait(lock);
+        Lock lock(optimization_mutex_);//使用 optimization_mutex_ 锁来保护优化过程的安全，避免多线程竞争
+        optimization_sem_.wait(lock);//线程等待优化信号量，这里是阻塞操作，直到接收到信号才会继续执行
 
-        if (isgnssobs_ || isvisualobs_) {
-            timecost.restart();
+        if (isgnssobs_ || isvisualobs_) {//如果 GNSS 或视觉数据可用，进入优化过程
+            timecost.restart();//重新启动时间计时器，开始记录优化过程的时间
 
             // 加锁, 保护状态量
             // Lock the state
             state_mutex_.lock();
 
-            if (gvinsstate_ == GVINS_INITIALIZING_INS) {
+            if (gvinsstate_ == GVINS_INITIALIZING_INS) {//检查系统状态是否处于GNSS/INS 初始化阶段
                 // GINS优化
                 // GNSS/INS optimization
-                bool isinitialized = gvinsInitializationOptimization();
+                bool isinitialized = gvinsInitializationOptimization();//调用 GNSS/INS 优化初始化方法，执行GINS优化
 
                 if (preintegrationlist_.size() >= static_cast<size_t>(initlength_)) {
                     // 完成GINS初始化, 进入视觉初始化阶段
-                    // Enter the initialization of the visual system
-                    gvinsstate_ = GVINS_INITIALIZING_VIO;
-                    if (isinitialized) {
+                    // Enter the initialization of the visual system，进入可视系统的初始化
+                    gvinsstate_ = GVINS_INITIALIZING_VIO;//将系统状态更新为视觉初始化阶段
+                    if (isinitialized) {//检查初始化是否成功
                         LOGI << "GINS initialization is finished";
                     } else {
                         LOGW << "GINS initialization is not convergence";
                     }
                 }
-            } else if (gvinsstate_ >= GVINS_TRACKING_INITIALIZING) {
+            } else if (gvinsstate_ >= GVINS_TRACKING_INITIALIZING) {//检查系统是否处于跟踪阶段的优化
 
                 if (map_->isMaximumKeframes()) {
-                    gvinsstate_ = GVINS_TRACKING_NORMAL;
+                    gvinsstate_ = GVINS_TRACKING_NORMAL;//更新系统状态为正常跟踪
                 }
 
                 // 两次非线性优化并进行粗差剔除
-                // Two-steps optimization with outlier culling
+                // Two-steps optimization with outlier culling，采用离群值剔除的两步优化
                 gvinsOptimization();
 
-                timecost2.restart();
+                timecost2.restart();//重启计时器，开始记录边缘化操作的时间
 
                 // 移除所有窗口中间插入的非关键帧
                 // Remove all non-keyframes time nodes
@@ -441,13 +465,13 @@ void GVINS::runOptimization() {
 
                 // 关键帧数量达到窗口大小, 需要边缘化操作, 并移除最老的关键帧及相关的GNSS和预积分观测, 由于计算力的问题,
                 // 可能导致多个关键帧同时加入优化, 需要进行多次边缘化操作
-                // Do marginalization
+                // Do marginalization，做边缘化
                 while (map_->isMaximumKeframes()) {
                     // 边缘化, 移除旧的观测, 按时间对齐到保留的最后一个关键帧
                     gvinsMarginalization();
                 }
 
-                timecosts_[2] = timecost2.costInMillisecond();
+                timecosts_[2] = timecost2.costInMillisecond();//记录边缘化操作的时间成本
 
                 // 统计并输出视觉相关的参数
                 // Log the statistic parameters
@@ -456,47 +480,49 @@ void GVINS::runOptimization() {
 
             // 可视化
             // For visualization
-            if (is_use_visualization_) {
-                auto state = Preintegration::stateFromData(statedatalist_.back(), preintegration_options_);
-                drawer_->updateMap(MISC::pose2Twc(MISC::stateToCameraPose(state, pose_b_c_)));
+            if (is_use_visualization_) {//如果启用了可视化功能
+                auto state = Preintegration::stateFromData(statedatalist_.back(), preintegration_options_);//获取最新的系统状态
+                drawer_->updateMap(MISC::pose2Twc(MISC::stateToCameraPose(state, pose_b_c_)));//更新地图以进行可视化
             }
 
             if (isgnssobs_)
-                isgnssobs_ = false;
+                isgnssobs_ = false;//重置 GNSS 观测标志
             if (isvisualobs_)
-                isvisualobs_ = false;
+                isvisualobs_ = false;//重置视觉观测标志
 
-            // Release the state lock
+            // Release the state lock，释放状态锁
             state_mutex_.unlock();
-            isoptimized_ = true;
+            isoptimized_ = true;//标记优化完成
 
             LOGI << "Optimization costs " << timecost.costInMillisecond() << " ms with " << timecosts_[0] << " and "
-                 << timecosts_[1] << " with marginalization costs " << timecosts_[2];
+                 << timecosts_[1] << " with marginalization costs " << timecosts_[2];//记录优化过程的时间成本日志
         }
     }
 }
 
+//GVINS 系统中负责图像跟踪的核心线程。它处理视觉帧数据，将其与惯性导航系统（INS）的数据融合，并管理关键帧的生成
 void GVINS::runTracking() {
-    Frame::Ptr frame;
-    Pose pose;
-    IntegrationState state, state0, state1;
+    Frame::Ptr frame;//智能指针，指向当前处理的帧
+    Pose pose;//当前帧的位姿
+    IntegrationState state, state0, state1;//轨迹的积分状态
 
-    std::deque<std::pair<IMU, IntegrationState>> ins_windows;
+    std::deque<std::pair<IMU, IntegrationState>> ins_windows;//IMU 数据和相应的积分状态窗口
 
-    LOGI << "Tracking thread is started";
+    LOGI << "Tracking thread is started";//打印日志，表示跟踪线程已经启动
     while (!isfinished_) {
-        Lock lock(tracking_mutex_);
-        tracking_sem_.wait(lock);
+        Lock lock(tracking_mutex_);//获取 tracking_mutex_ 锁，以保护跟踪过程中的数据访问
+        tracking_sem_.wait(lock);//等待信号量 tracking_sem_ 的通知，表明有新的帧数据需要处理
 
-        // 处理所有缓存
+        // 处理缓存中的所有帧
         // Process all the frames
         while (!frame_buffer_.empty()) {
             TimeCost timecost;
 
-            Pose pose_b_c;
-            double td;
+            //获取外参信息
+            Pose pose_b_c;//存储外参
+            double td;//时间延迟
             {
-                Lock lock3(extrinsic_mutex_);
+                Lock lock3(extrinsic_mutex_);//加锁以保护外参数据的访问
                 pose_b_c = pose_b_c_;
                 td       = td_b_c_;
             }
@@ -504,10 +530,10 @@ void GVINS::runTracking() {
             // 读取缓存
             {
                 frame_buffer_mutex_.lock();
-                frame = frame_buffer_.front();
+                frame = frame_buffer_.front();//获取缓存中的第一帧
 
                 // 保证每个图像都有先验的惯导位姿
-                // Wait until the INS is available
+                // Wait until the INS is available，检查INS数据可用性
                 ins_mutex_.lock();
                 if (ins_window_.empty() || (ins_window_.back().second.time <= (frame->stamp() + td))) {
                     ins_mutex_.unlock();
@@ -518,7 +544,7 @@ void GVINS::runTracking() {
                 }
                 ins_mutex_.unlock();
 
-                frame_buffer_.pop();
+                frame_buffer_.pop();//从缓存中移除已经读取的帧
                 frame_buffer_mutex_.unlock();
             }
 
@@ -526,20 +552,22 @@ void GVINS::runTracking() {
             // The prior pose from INS
             {
                 Lock lock2(ins_mutex_);
-                frame->setStamp(frame->stamp() + td);
-                frame->setTimeDelay(td);
-                MISC::getCameraPoseFromInsWindow(ins_window_, pose_b_c, frame->stamp(), pose);
+                frame->setStamp(frame->stamp() + td);//设置帧的时间戳，考虑时间延迟 td
+                frame->setTimeDelay(td);//设置帧的时间延迟
+                MISC::getCameraPoseFromInsWindow(ins_window_, pose_b_c, frame->stamp(), pose);//从 INS 窗口中获取当前帧的初始位姿
                 frame->setPose(pose);
             }
 
-            TrackState trackstate = tracking_->track(frame);
-            if (trackstate == TRACK_LOST) {
-                LOGE << "Tracking lost at " << Logging::doubleData(frame->stamp());
+            //跟踪当前帧
+            TrackState trackstate = tracking_->track(frame);//使用 tracking_ 对象对当前帧进行跟踪
+            if (trackstate == TRACK_LOST) {//如果跟踪失败
+                LOGE << "Tracking lost at " << Logging::doubleData(frame->stamp());//记录跟踪失败的时间戳
             }
 
             // 包括第一帧在内的所有关键帧, 跟踪失败时的当前帧也会成为新的关键帧
             // All possible keyframes
             if (tracking_->isNewKeyFrame() || (trackstate == TRACK_FIRST_FRAME) || trackstate == TRACK_LOST) {
+               //如果当前帧是新关键帧，或是第一帧，或跟踪失败
                 Lock lock3(keyframes_mutex_);
                 keyframes_.push(frame);
 
@@ -551,6 +579,7 @@ void GVINS::runTracking() {
     }
 }
 
+//用于安全地关闭 GVINS 系统。在多线程的情况下，它确保所有相关的线程和资源在退出时得到正确处理，防止资源泄漏和不一致的问题。
 void GVINS::setFinished() {
     isfinished_ = true;
 
@@ -564,11 +593,13 @@ void GVINS::setFinished() {
     optimization_thread_.join();
     fusion_thread_.join();
 
+    //可视化线程的处理
     if (is_use_visualization_) {
         drawer_->setFinished();
         drawer_thread_.join();
     }
 
+    //计算并输出估计的外参
     Quaterniond q_b_c = Rotation::matrix2quaternion(pose_b_c_.R);
     Vector3d t_b_c    = pose_b_c_.t;
 
