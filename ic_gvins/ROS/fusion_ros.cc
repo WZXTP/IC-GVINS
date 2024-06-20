@@ -55,40 +55,41 @@ void FusionROS::run() {
     ros::NodeHandle nh;
     ros::NodeHandle pnh("~");
 
+    //读取ROS参数
     // message topic，获取消息话题
     string imu_topic, gnss_topic, image_topic, livox_topic;
-    pnh.param<string>("imu_topic", imu_topic, "/imu0");
-    pnh.param<string>("gnss_topic", gnss_topic, "/gnss0");
-    pnh.param<string>("image_topic", image_topic, "/cam0");
+    pnh.param<string>("imu_topic", imu_topic, "/imu0");//从 ROS 参数服务器读取 IMU 数据的主题名称，如果未设置，则使用默认值 /imu0。
+    pnh.param<string>("gnss_topic", gnss_topic, "/gnss0");//从 ROS 参数服务器读取 GNSS 数据的主题名称，默认值为 /gnss0。
+    pnh.param<string>("image_topic", image_topic, "/cam0");//从 ROS 参数服务器读取图像数据的主题名称，默认值为 /cam0。
 
     //加载配置文件，从ROS参数服务器中读取配置文件路径，并使用YAML库加载配置文件内容。如果加载失败，则输出错误信息并返回。
     // GVINS parameter
     string configfile;
-    pnh.param<string>("configfile", configfile, "gvins.yaml");
+    pnh.param<string>("configfile", configfile, "gvins.yaml");//从 ROS 参数服务器读取配置文件路径，使用默认值 gvins.yaml。
 
     // Load configurations
-    YAML::Node config;
+    YAML::Node config;//定义一个 YAML 节点 config 来存储配置文件内容
     std::vector<double> vecdata;
     try {
-        config = YAML::LoadFile(configfile);
+        config = YAML::LoadFile(configfile);//加载 YAML 配置文件内容。
     } catch (YAML::Exception &exception) {
         std::cout << "Failed to open configuration file" << std::endl;
         return;
     }
     //创建输出目录
-    auto outputpath        = config["outputpath"].as<string>();
-    auto is_make_outputdir = config["is_make_outputdir"].as<bool>();
+    auto outputpath        = config["outputpath"].as<string>();//从配置文件中读取输出路径。
+    auto is_make_outputdir = config["is_make_outputdir"].as<bool>();//从配置文件中读取是否需要创建新的输出目录的标志。
 
     // Create the output directory
-    if (!boost::filesystem::is_directory(outputpath)) {
+    if (!boost::filesystem::is_directory(outputpath)) {//如果 outputpath 目录不存在，则创建该目录。
         boost::filesystem::create_directory(outputpath);
     }
-    if (!boost::filesystem::is_directory(outputpath)) {
+    if (!boost::filesystem::is_directory(outputpath)) {//如果目录创建失败，输出错误信息并退出方法。
         std::cout << "Failed to open outputpath" << std::endl;
         return;
     }
 
-    if (is_make_outputdir) {
+    if (is_make_outputdir) {//如果需要创建新的输出目录，则根据当前时间生成一个新的目录名并创建。
         absl::CivilSecond cs = absl::ToCivilSecond(absl::Now(), absl::LocalTimeZone());
         absl::StrAppendFormat(&outputpath, "/T%04d%02d%02d%02d%02d%02d", cs.year(), cs.month(), cs.day(), cs.hour(),
                               cs.minute(), cs.second());
@@ -96,14 +97,14 @@ void FusionROS::run() {
     }
 
     // GNSS outage configurations，GNSS故障配置
-    isusegnssoutage_ = config["isusegnssoutage"].as<bool>();
-    gnssoutagetime_  = config["gnssoutagetime"].as<double>();
-    gnssthreshold_   = config["gnssthreshold"].as<double>();
+    isusegnssoutage_ = config["isusegnssoutage"].as<bool>();//是否使用 GNSS 故障处理
+    gnssoutagetime_  = config["gnssoutagetime"].as<double>();//GNSS 故障时间
+    gnssthreshold_   = config["gnssthreshold"].as<double>();//GNSS 故障阈值
 
     // Glog output path，设置日志输出路径
     FLAGS_log_dir = outputpath;
 
-    // The GVINS object，创建GVINS对象
+    // The GVINS object，创建GVINS对象，初始化GVINS对象
     Drawer::Ptr drawer = std::make_shared<DrawerRviz>(nh);
     gvins_             = std::make_shared<GVINS>(configfile, outputpath, drawer);
 
@@ -114,10 +115,11 @@ void FusionROS::run() {
     }
 
     // subscribe message，订阅ROS消息
-    ros::Subscriber imu_sub   = nh.subscribe<sensor_msgs::Imu>(imu_topic, 200, &FusionROS::imuCallback, this);
-    ros::Subscriber gnss_sub  = nh.subscribe<sensor_msgs::NavSatFix>(gnss_topic, 1, &FusionROS::gnssCallback, this);
-    ros::Subscriber image_sub = nh.subscribe<sensor_msgs::Image>(image_topic, 20, &FusionROS::imageCallback, this);
+    ros::Subscriber imu_sub   = nh.subscribe<sensor_msgs::Imu>(imu_topic, 200, &FusionROS::imuCallback, this);//订阅 IMU 数据，消息队列大小为 200，回调函数为 imuCallback。
+    ros::Subscriber gnss_sub  = nh.subscribe<sensor_msgs::NavSatFix>(gnss_topic, 1, &FusionROS::gnssCallback, this);//订阅 GNSS 数据，消息队列大小为 1，回调函数为 gnssCallback。
+    ros::Subscriber image_sub = nh.subscribe<sensor_msgs::Image>(image_topic, 20, &FusionROS::imageCallback, this);// 订阅图像数据，消息队列大小为 20，回调函数为 imageCallback。
 
+    //启动ROS消息循环
     LOGI << "Waiting ROS message...";
 
     // enter message loopback，ROS消息循环
