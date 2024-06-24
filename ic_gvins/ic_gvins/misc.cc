@@ -20,6 +20,15 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/*这段代码是IC-GVINS系统的一部分，主要处理IMU数据的管理和导航状态的更新。
+为了更好地理解这些代码在论文中的相关部分，我们可以将其与IC-GVINS系统的
+整体框架及其处理流程联系起来。
+代码实现了IC-GVINS系统中的IMU和状态管理，包括插值、机械化、零速度检测和状态更新。
+这些功能直接支持论文中关于多传感器融合、IMU数据处理和导航状态估计的讨论。
+具体代码段展示了如何处理全局姿态（位置和四元数）增量，这对于系统的精确导航至关重要。
+
+*/
+
 #include "misc.h"
 
 #include "common/angle.h"
@@ -27,17 +36,23 @@
 #include "common/logging.h"
 #include "common/rotation.h"
 
+//这个函数的主要目的是在给定时间点 time，从一个包含 IMU 数据和对应的状态的双端队列（deque）中找到第一个时间戳大于 time 的索引。
 size_t MISC::getInsWindowIndex(const std::deque<std::pair<IMU, IntegrationState>> &window, double time) {
+    //window: 包含一系列 IMU 数据和对应状态的双端队列。
+    //IMU 是惯性测量单元的数据，
+    //IntegrationState 是系统在该时刻的状态。
     // 返回时间大于输入的第一个索引
 
+    //边界条件检查
     if (window.empty() || (window.front().first.time > time) || (window.back().first.time <= time)) {
         return 0;
-    }
+    }//函数首先检查 window 是否为空，或者 time 是否在 window 的时间范围之外。
 
-    size_t index = 0;
+    //初始化二分搜索。定义用于二分查找的变量 sta 和 end，分别表示搜索范围的起始和结束位置。
+    size_t index = 0;//index 变量将存储结果索引。
     size_t sta = 0, end = window.size();
 
-    // 二分法搜索
+    // 二分法搜索循环
     int counts = 0;
     while (true) {
         auto mid = (sta + end) / 2;
@@ -45,7 +60,7 @@ size_t MISC::getInsWindowIndex(const std::deque<std::pair<IMU, IntegrationState>
         auto first  = window[mid - 1].first.time;
         auto second = window[mid].first.time;
 
-        if ((first <= time) && (time < second)) {
+        if ((first <= time) && (time < second)) {//函数比较 mid-1 和 mid 位置的时间戳来决定是调整 sta 还是 end。
             index = mid;
             break;
         } else if (first > time) {
@@ -54,6 +69,8 @@ size_t MISC::getInsWindowIndex(const std::deque<std::pair<IMU, IntegrationState>
             sta = mid;
         }
 
+        //防止无限循环。添加了一个安全机制，以防止在逻辑错误时进入无限循环。
+        //如果循环迭代超过 15 次，函数会记录一个错误日志并退出。
         // 65536 / 200 = 327.68
         if (counts++ > 15) {
             LOGE << "Failed to get ins window index at " << Logging::doubleData(time);
@@ -64,12 +81,18 @@ size_t MISC::getInsWindowIndex(const std::deque<std::pair<IMU, IntegrationState>
     return index;
 }
 
+//在 IC-GVINS 系统中用于从 IMU 数据窗口中提取特定时间点的相机位姿。
+//这个函数利用了之前介绍的 getInsWindowIndex 函数来查找时间点，并根据这个时间点插值出对应的相机位姿。
 bool MISC::getCameraPoseFromInsWindow(const std::deque<std::pair<IMU, IntegrationState>> &window, const Pose &pose_b_c,
                                       double time, Pose &pose) {
+    //window: 一个包含 IMU 数据和对应状态的双端队列。
+    //pose_b_c: 一个表示从 IMU 到相机的固定变换的位姿
+    //time: 要插值和获取的时间点
+    //pose: 用于存储计算得到的相机位姿的变量
     // 位置内插
-    size_t index = getInsWindowIndex(window, time);
+    size_t index = getInsWindowIndex(window, time);//获取时间点的索引。使用getInsWindowIndex函数获取time对应的第一个时间戳大于time的索引
     IntegrationState state;
-    if (index > 0) {
+    if (index > 0) {//检查索引
         auto state0 = window[index - 1].second;
         auto state1 = window[index].second;
 
