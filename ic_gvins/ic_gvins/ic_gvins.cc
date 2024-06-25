@@ -43,7 +43,7 @@
 #include <ceres/ceres.h>
 #include <yaml-cpp/yaml.h>
 
-//系统初始化了一个 INS-Centric GNSS-Visual-Inertial Navigation System (GVINS)，
+//系统初始化了一个 GNSS-Visual-Inertial Navigation System (GVINS)，
 //配置和设置了系统的各个组件
 GVINS::GVINS(const string &configfile, const string &outputpath, Drawer::Ptr drawer) {
     //初始化状态
@@ -64,20 +64,21 @@ GVINS::GVINS(const string &configfile, const string &outputpath, Drawer::Ptr dra
     // Output files
     //初始化输出文件
     //使用 FileSaver 创建不同的数据保存文件，以保存导航数据、地图点、统计数据、外参数据、IMU 误差和轨迹数据。
-    //如果文件打开失败，记录错误日志并返回。将配置文件的内容备份到输出路径中。
-    navfilesaver_    = FileSaver::create(outputpath + "/gvins.nav", 11);
-    ptsfilesaver_    = FileSaver::create(outputpath + "/mappoint.txt", 3);
-    statfilesaver_   = FileSaver::create(outputpath + "/statistics.txt", 3);
-    extfilesaver_    = FileSaver::create(outputpath + "/extrinsic.txt", 3);
-    imuerrfilesaver_ = FileSaver::create(outputpath + "/IMU_ERR.bin", 7, FileSaver::BINARY);
-    trajfilesaver_   = FileSaver::create(outputpath + "/trajectory.csv", 8);
+    
+    navfilesaver_    = FileSaver::create(outputpath + "/gvins.nav", 11);//导航数据
+    ptsfilesaver_    = FileSaver::create(outputpath + "/mappoint.txt", 3);//地图点
+    statfilesaver_   = FileSaver::create(outputpath + "/statistics.txt", 3);//统计数据
+    extfilesaver_    = FileSaver::create(outputpath + "/extrinsic.txt", 3);//外参数据
+    imuerrfilesaver_ = FileSaver::create(outputpath + "/IMU_ERR.bin", 7, FileSaver::BINARY);//IMU 误差
+    trajfilesaver_   = FileSaver::create(outputpath + "/trajectory.csv", 8);//轨迹数据
 
+    //如果文件打开失败，记录错误日志并返回。将配置文件的内容备份到输出路径中。
     if (!navfilesaver_->isOpen() || !ptsfilesaver_->isOpen() || !statfilesaver_->isOpen() || !extfilesaver_->isOpen()) {
         LOGE << "Failed to open data file";
         return;
     }
 
-    //复制配置文件
+    //复制配置文件到输出目录
     // Make a copy of configuration file to the output directory
     std::ofstream ofconfig(outputpath + "/gvins.yaml");
     ofconfig << YAML::Dump(config);
@@ -85,89 +86,91 @@ GVINS::GVINS(const string &configfile, const string &outputpath, Drawer::Ptr dra
 
     //初始化系统参数
     //Initialize system parameters
+    //从配置文件中读取初始化长度initlength_、IMU数据速率imudatarate_，并计算IMU数据的时间间隔imudatadt_。
     initlength_       = config["initlength"].as<int>();//初始化长度
-    imudatarate_      = config["imudatarate"].as<double>();//IMU数据速率和时间间隔
+    imudatarate_      = config["imudatarate"].as<double>();//IMU数据速率
     imudatadt_        = 1.0 / imudatarate_;//IMU数据的时间间隔 imudatadt_ 根据IMU数据率计算
     reserved_ins_num_ = 2;//保存INS数据的数量
 
-    // 安装参数
+    // 初始化天线杠杆臂参数
     // Installation parameters
     vecdata   = config["antlever"].as<std::vector<double>>();
     antlever_ = Vector3d(vecdata.data());
-    //天线杠杆臂参数 antlever_ 从配置文件中读取，并转换为 Eigen 向量。
+    //天线杠杆臂参数 antlever_ 从配置文件中读取，并转换为 Eigen 三维向量。
 
-    // IMU噪声参数
+    //初始化 IMU 噪声参数
     // IMU parameters
     integration_parameters_               = std::make_shared<IntegrationParameters>();
-    integration_parameters_->gyr_arw      = config["imumodel"]["arw"].as<double>() * D2R / 60.0;
-    integration_parameters_->gyr_bias_std = config["imumodel"]["gbstd"].as<double>() * D2R / 3600.0;
-    integration_parameters_->acc_vrw      = config["imumodel"]["vrw"].as<double>() / 60.0;
-    integration_parameters_->acc_bias_std = config["imumodel"]["abstd"].as<double>() * 1.0e-5;
-    integration_parameters_->corr_time    = config["imumodel"]["corrtime"].as<double>() * 3600;
-    integration_parameters_->gravity      = NORMAL_GRAVITY;
+    integration_parameters_->gyr_arw      = config["imumodel"]["arw"].as<double>() * D2R / 60.0;//陀螺仪的角速度随机游走
+    integration_parameters_->gyr_bias_std = config["imumodel"]["gbstd"].as<double>() * D2R / 3600.0;//陀螺仪偏置标准差
+    integration_parameters_->acc_vrw      = config["imumodel"]["vrw"].as<double>() / 60.0;//加速度计随机游走
+    integration_parameters_->acc_bias_std = config["imumodel"]["abstd"].as<double>() * 1.0e-5;//加速度计偏置标准差
+    integration_parameters_->corr_time    = config["imumodel"]["corrtime"].as<double>() * 3600;//噪声相关时间
+    integration_parameters_->gravity      = NORMAL_GRAVITY;//重力值gravity被设为一个常量NORMAL_GRAVITY
     //使用配置文件中的数据初始化 IMU 的噪声模型参数，
-    //包括角速度随机游走 (gyr_arw)、陀螺仪偏置标准差 (gyr_bias_std)、加速度计随机游走 (acc_vrw)、加速度计偏置标准差 (acc_bias_std) 等。
 
-    //整合配置
-    //integration_config_ 中的参数，如是否考虑地球自转 (iswithearth) 及重力值等，也根据配置文件进行初始化。
+    //初始化整合配置
+    //初始化整合配置 integration_config_ 中的参数，包括是否考虑地球自转 (iswithearth) 及重力值等，也根据配置文件进行初始化。
     integration_config_.iswithearth = config["iswithearth"].as<bool>();
     integration_config_.isuseodo    = false;
     integration_config_.iswithscale = false;
-    integration_config_.gravity     = {0, 0, integration_parameters_->gravity};
+    integration_config_.gravity     = {0, 0, integration_parameters_->gravity};//设置重力向量gravity为一个三维向量，其Z轴分量为之前初始化的重力常量
 
     // 初始值, 后续根据GNSS定位实时更新
     // GNSS variables intializaiton，初始化GNSS变量
-    integration_config_.origin.setZero();
+    integration_config_.origin.setZero();//将原点origin和GNSS位置变量last_gnss_、gnss_初始化为零向量。
     last_gnss_.blh.setZero();
     gnss_.blh.setZero();
 
-    preintegration_options_ = Preintegration::getOptions(integration_config_);
+    preintegration_options_ = Preintegration::getOptions(integration_config_);//获取预积分选项preintegration_options_
 
     // 初始化相机参数
     // Camera parameters
-    vector<double> intrinsic  = config["cam0"]["intrinsic"].as<std::vector<double>>();
-    vector<double> distortion = config["cam0"]["distortion"].as<std::vector<double>>();
-    vector<int> resolution    = config["cam0"]["resolution"].as<std::vector<int>>();
+    vector<double> intrinsic  = config["cam0"]["intrinsic"].as<std::vector<double>>();//相机的内参
+    vector<double> distortion = config["cam0"]["distortion"].as<std::vector<double>>();//相机的畸变参数
+    vector<int> resolution    = config["cam0"]["resolution"].as<std::vector<int>>();//分辨率
 
-    camera_ = Camera::createCamera(intrinsic, distortion, resolution);
+    camera_ = Camera::createCamera(intrinsic, distortion, resolution);//创建一个Camera对象，用于处理相机参数
 
-    // 初始化IMU和Camera外参
+    // 初始化 IMU 和相机外参
     // Extrinsic parameters
+    //从配置文件中读取相机相对于IMU的旋转四元数q_b_c和平移向量t_b_c。
     vecdata           = config["cam0"]["q_b_c"].as<std::vector<double>>();
     Quaterniond q_b_c = Eigen::Quaterniond(vecdata.data());
     vecdata           = config["cam0"]["t_b_c"].as<std::vector<double>>();
     Vector3d t_b_c    = Eigen::Vector3d(vecdata.data());
     td_b_c_           = config["cam0"]["td_b_c"].as<double>();
 
-    pose_b_c_.R = q_b_c.toRotationMatrix();
-    pose_b_c_.t = t_b_c;
+    pose_b_c_.R = q_b_c.toRotationMatrix();//转换为旋转矩阵并存储在pose_b_c_中
+    pose_b_c_.t = t_b_c;//读取IMU和相机的时间延迟td_b_c_
 
-    // 优化参数
+    // 初始化优化参数
     // Optimization parameters
-    reprojection_error_std_      = config["reprojection_error_std"].as<double>();
-    optimize_estimate_extrinsic_ = config["optimize_estimate_extrinsic"].as<bool>();
-    optimize_estimate_td_        = config["optimize_estimate_td"].as<bool>();
-    optimize_num_iterations_     = config["optimize_num_iterations"].as<int>();
-    optimize_windows_size_       = config["optimize_windows_size"].as<size_t>();
+    reprojection_error_std_      = config["reprojection_error_std"].as<double>();//重投影误差标准差
+    optimize_estimate_extrinsic_ = config["optimize_estimate_extrinsic"].as<bool>();//是否优化外参
+    optimize_estimate_td_        = config["optimize_estimate_td"].as<bool>();//是否优化时间延迟
+    optimize_num_iterations_     = config["optimize_num_iterations"].as<int>();//优化的迭代次数
+    optimize_windows_size_       = config["optimize_windows_size"].as<size_t>();//滑窗大小
 
     // 归一化相机坐标系下
     // Reprojection std
-    optimize_reprojection_error_std_ = reprojection_error_std_ / camera_->focalLength();
+    optimize_reprojection_error_std_ = reprojection_error_std_ / camera_->focalLength();//计算并设置标准化的重投影误差
 
     // 初始化可视化参数
     is_use_visualization_ = config["is_use_visualization"].as<bool>();
 
     // Initialize the containers，初始化容器
-    preintegrationlist_.clear();
-    statedatalist_.clear();
-    gnsslist_.clear();
-    timelist_.clear();
+    preintegrationlist_.clear();//清空预积分列表
+    statedatalist_.clear();//状态数据列表
+    gnsslist_.clear();// GNSS 数据列表
+    timelist_.clear();//时间列表
 
     // GVINS fusion objects，初始化GVINS对象
+    //创建Map对象map_，并初始化drawer_（用于可视化）和tracking_（用于跟踪）的共享指针。
     map_    = std::make_shared<Map>(optimize_windows_size_);
     drawer_ = std::move(drawer);
     drawer_->setMap(map_);
-    if (is_use_visualization_) {
+    if (is_use_visualization_) {//如果启用了可视化，则启动一个Drawer
         drawer_thread_ = std::thread(&Drawer::run, drawer_);
     }
     tracking_ = std::make_shared<Tracking>(camera_, map_, drawer_, configfile, outputpath);
