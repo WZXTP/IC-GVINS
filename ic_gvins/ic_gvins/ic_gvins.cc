@@ -1711,41 +1711,58 @@ bool GVINS::gvinsMarginalization() {
     return true;
 }
 
+//检查每个预积分数据（Preintegration）的状态与其理论预期是否一致，如果发现偏差超过阈值，则对其进行重新整合，以修正可能累积的误差。
 void GVINS::doReintegration() {
+    //初始化计数器
     int cnt = 0;
+    //遍历预积分数据列表
     for (size_t k = 0; k < preintegrationlist_.size(); k++) {
+        // 获取当前预积分数据的状态
         IntegrationState state = Preintegration::stateFromData(statedatalist_[k], preintegration_options_);
+        // 计算当前预积分数据的偏差
         Vector3d dbg           = preintegrationlist_[k]->deltaState().bg - state.bg;
         Vector3d dba           = preintegrationlist_[k]->deltaState().ba - state.ba;
+        // 检查偏差是否超过阈值
         if ((dbg.norm() > 6 * integration_parameters_->gyr_bias_std) ||
             (dba.norm() > 6 * integration_parameters_->acc_bias_std)) {
+            // 如果偏差超过阈值，则执行重新整合
             preintegrationlist_[k]->reintegration(state);
             cnt++;
         }
     }
+    //记录重新整合次数
     if (cnt) {
         LOGW << "Reintegration " << cnt << " preintegration";
     }
 }
 
+//根据地图中的有效地标点（landmarks），为每个地标点的逆深度和外部参数（extrinsic parameters）
+//添加到 Ceres 优化问题中，并根据需要设置它们的参数化方式和是否进行优化。
 void GVINS::addReprojectionParameters(ceres::Problem &problem) {
+    //检查地图中是否存在地标点
     if (map_->landmarks().empty()) {
         return;
     }
 
+    //清空之前存储的地标点逆深度列表，准备重新填充有效地标点的逆深度。
     invdepthlist_.clear();
+    //遍历地图中每个地标点
     for (const auto &landmark : map_->landmarks()) {
         const auto &mappoint = landmark.second;
+        // 检查地标点是否有效且不是异常点
         if (!mappoint || mappoint->isOutlier()) {
             continue;
         }
 
+        // 检查地标点的逆深度是否已存在
         if (invdepthlist_.find(mappoint->id()) == invdepthlist_.end()) {
             auto frame = mappoint->referenceFrame();
+            // 检查参考帧是否有效且存在于地图中
             if (!frame || !map_->isKeyFrameInMap(frame)) {
                 continue;
             }
 
+            // 获取地标点的深度和逆深度
             double depth         = mappoint->depth();
             double inverse_depth = 1.0 / depth;
 
@@ -1758,15 +1775,18 @@ void GVINS::addReprojectionParameters(ceres::Problem &problem) {
                 continue;
             }
 
+            // 将有效地标点的逆深度加入列表，并将其作为优化参数块添加到问题中
             invdepthlist_[mappoint->id()] = inverse_depth;
             problem.AddParameterBlock(&invdepthlist_[mappoint->id()], 1);
 
+            // 更新地标点的优化次数统计（这部分逻辑在地标点类中）
             mappoint->addOptimizedTimes();
         }
     }
 
     // 外参
     // Extrinsic parameters
+    // 设置相机与IMU的外部参数
     extrinsic_[0] = pose_b_c_.t[0];
     extrinsic_[1] = pose_b_c_.t[1];
     extrinsic_[2] = pose_b_c_.t[2];
@@ -1778,15 +1798,18 @@ void GVINS::addReprojectionParameters(ceres::Problem &problem) {
     extrinsic_[5] = qic.z();
     extrinsic_[6] = qic.w();
 
+    // 为外部参数添加本地参数化
     ceres::LocalParameterization *parameterization = new (PoseParameterization);
     problem.AddParameterBlock(extrinsic_, 7, parameterization);
 
+    // 根据优化选项设置外部参数是否固定
     if (!optimize_estimate_extrinsic_ || gvinsstate_ != GVINS_TRACKING_NORMAL) {
         problem.SetParameterBlockConstant(extrinsic_);
     }
 
     // 时间延时
     // Time delay
+    // 设置时间延迟的外部参数
     extrinsic_[7] = td_b_c_;
     problem.AddParameterBlock(&extrinsic_[7], 1);
     if (!optimize_estimate_td_ || gvinsstate_ != GVINS_TRACKING_NORMAL) {
@@ -1794,48 +1817,59 @@ void GVINS::addReprojectionParameters(ceres::Problem &problem) {
     }
 }
 
+//该函数的主要目的是遍历地图中的所有地标点（landmarks），为每对有效的观测帧（keyframes）之间的地标点添加一个重投影误差项作为优化问题的残差项。
 vector<ceres::ResidualBlockId> GVINS::addReprojectionFactors(ceres::Problem &problem, bool isusekernel) {
 
     vector<ceres::ResidualBlockId> residual_ids;
 
-    if (map_->keyframes().empty()) {
+    //检查地图中是否存在关键帧
+    if (map_->keyframes().empty()) {//如果地图中没有关键帧，则直接返回空的 residual_ids 向量，不执行后续操作。
         return residual_ids;
     }
 
+    //设置损失函数
     ceres::LossFunction *loss_function = nullptr;
-    if (isusekernel) {
+    if (isusekernel) {//根据 isusekernel 的值确定是否使用 Huber Loss 作为损失函数
         loss_function = new ceres::HuberLoss(1.0);
     }
 
     residual_ids.clear();
+    //遍历地图中的每个地标点
     for (const auto &landmark : map_->landmarks()) {
         const auto &mappoint = landmark.second;
+        //检查地标点是否有效且不是异常点
         if (!mappoint || mappoint->isOutlier()) {
             continue;
         }
 
+        //检查地标点的逆深度是否已存在
         if (invdepthlist_.find(mappoint->id()) == invdepthlist_.end()) {
             continue;
         }
 
+        //获取地标点的参考帧
         auto ref_frame = mappoint->referenceFrame();
         if (!map_->isKeyFrameInMap(ref_frame)) {
             continue;
         }
 
+        //获取参考帧的像素坐标
         auto ref_frame_pc      = camera_->pixel2cam(mappoint->referenceKeypoint());
+        //获取参考帧在状态列表中的索引
         size_t ref_frame_index = getStateDataIndex(ref_frame->stamp());
         if (ref_frame_index < 0) {
             continue;
         }
 
+        //获取或初始化地标点的逆深度
         double *invdepth = &invdepthlist_[mappoint->id()];
         if (*invdepth == 0) {
             *invdepth = 1.0 / MapPoint::DEFAULT_DEPTH;
         }
-
+        //获取参考帧的特征信息
         auto ref_feature = ref_frame->features().find(mappoint->id())->second;
 
+        //遍历地标点的所有观测帧
         auto observations = mappoint->observations();
         for (auto &observation : observations) {
             auto obs_feature = observation.lock();
@@ -1843,23 +1877,29 @@ vector<ceres::ResidualBlockId> GVINS::addReprojectionFactors(ceres::Problem &pro
                 continue;
             }
             auto obs_frame = obs_feature->getFrame();
+            //检查观测帧是否有效的关键帧且存在于地图中，并且不与参考帧相同
             if (!obs_frame || !obs_frame->isKeyFrame() || !map_->isKeyFrameInMap(obs_frame) ||
                 (obs_frame == ref_frame)) {
                 continue;
             }
 
+            // 获取观测帧的像素坐标
             auto obs_frame_pc      = camera_->pixel2cam(obs_feature->keyPoint());
+            // 获取观测帧在状态列表中的索引
             size_t obs_frame_index = getStateDataIndex(obs_frame->stamp());
 
+            // 检查索引的有效性和参考帧与观测帧索引不同
             if ((obs_frame_index < 0) || (ref_frame_index == obs_frame_index)) {
                 LOGE << "Wrong matched mapoint keyframes " << Logging::doubleData(ref_frame->stamp()) << " with "
                      << Logging::doubleData(obs_frame->stamp());
                 continue;
             }
 
+            // 创建重投影因子
             auto factor = new ReprojectionFactor(ref_frame_pc, obs_frame_pc, ref_feature->velocityInPixel(),
                                                  obs_feature->velocityInPixel(), ref_frame->timeDelay(),
                                                  obs_frame->timeDelay(), optimize_reprojection_error_std_);
+            // 将重投影因子添加到优化问题中，并记录残差块的ID
             auto residual_block_id =
                 problem.AddResidualBlock(factor, loss_function, statedatalist_[ref_frame_index].pose,
                                          statedatalist_[obs_frame_index].pose, extrinsic_, invdepth, &extrinsic_[7]);
@@ -1867,9 +1907,10 @@ vector<ceres::ResidualBlockId> GVINS::addReprojectionFactors(ceres::Problem &pro
         }
     }
 
-    return residual_ids;
+    return residual_ids;//返回包含所有添加的残差块ID的向量 residual_ids
 }
 
+//用于获取与给定时间最接近的状态数据索引 index 的函数
 int GVINS::getStateDataIndex(double time) {
 
     size_t index = MISC::getStateDataIndex(timelist_, time, MISC::MINIMUM_TIME_INTERVAL);
@@ -1881,90 +1922,117 @@ int GVINS::getStateDataIndex(double time) {
     return static_cast<int>(index);
 }
 
+//通过遍历状态数据列表 statedatalist_，为每个状态数据添加位姿和IMU混合参数块到Ceres优化问题中。这样做的目的是让Ceres能够在优化过程中调整这些参数，
+//以最小化与传感器测量数据不一致的残差，从而提高多传感器融合定位系统的精度和准确性。
 void GVINS::addStateParameters(ceres::Problem &problem) {
+    //记录日志，显示位姿状态列表中的总数和时间范围
     LOGI << "Total " << statedatalist_.size() << " pose states from "
          << Logging::doubleData(statedatalist_.begin()->time) << " to "
          << Logging::doubleData(statedatalist_.back().time);
 
+    //遍历状态数据列表
     for (auto &statedata : statedatalist_) {
-        // 位姿
+        // 位姿参数块
         // Pose
         ceres::LocalParameterization *parameterization = new (PoseParameterization);
         problem.AddParameterBlock(statedata.pose, Preintegration::numPoseParameter(), parameterization);
 
-        // IMU mix parameters
+        // IMU mix parameters。IMU混合参数块
         problem.AddParameterBlock(statedata.mix, Preintegration::numMixParameter(preintegration_options_));
     }
 }
 
+//将IMU预积分因子、IMU误差因子和IMU初始先验因子（如果设置了先验）添加到Ceres优化问题中，以优化系统的状态变量，包括姿态、速度等。
 void GVINS::addImuFactors(ceres::Problem &problem) {
-    for (size_t k = 0; k < preintegrationlist_.size(); k++) {
-        // 预积分因子
-        // IMU preintegration factors
+    // IMU 预积分因子
+    for (size_t k = 0; k < preintegrationlist_.size(); k++) {//preintegrationlist_ 存储了IMU预积分数据的列表
         auto factor = new PreintegrationFactor(preintegrationlist_[k]);
+        //创建一个 PreintegrationFactor 对象 factor，该对象使用预积分数据初始化
         problem.AddResidualBlock(factor, nullptr, statedatalist_[k].pose, statedatalist_[k].mix,
                                  statedatalist_[k + 1].pose, statedatalist_[k + 1].mix);
+        //将 factor 添加为一个残差块到优化问题中。这个残差块关联了优化变量，包括姿态 statedatalist_[k].pose 和混合状态 statedatalist_[k].mix，
+        //以及下一个时间步的姿态 statedatalist_[k + 1].pose 和混合状态 statedatalist_[k + 1].mix。
     }
 
     // 添加IMU误差约束, 限制过大的误差估计
-    // IMU error factor
-    auto factor = new ImuErrorFactor(preintegration_options_);
-    problem.AddResidualBlock(factor, nullptr, statedatalist_[preintegrationlist_.size()].mix);
+    // IMU error factor。IMU误差因子
+    auto factor = new ImuErrorFactor(preintegration_options_);//创建一个 ImuErrorFactor 对象 factor，该对象用于处理IMU误差的约束。
+    problem.AddResidualBlock(factor, nullptr, statedatalist_[preintegrationlist_.size()].mix);//将 factor 添加为一个残差块到优化问题中。这个残差块仅关联了混合状态
 
     // IMU初始先验因子, 仅限于初始化
     // IMU prior factor, only for initialization
-    if (is_use_prior_) {
-        auto pose_factor = new ImuPosePriorFactor(pose_prior_, pose_prior_std_);
-        problem.AddResidualBlock(pose_factor, nullptr, statedatalist_[0].pose);
+    if (is_use_prior_) {//表示要使用IMU的初始先验信息
+        auto pose_factor = new ImuPosePriorFactor(pose_prior_, pose_prior_std_);//该对象使用给定的姿态先验 pose_prior_ 和标准差 pose_prior_std_ 初始化。
+        problem.AddResidualBlock(pose_factor, nullptr, statedatalist_[0].pose);//将 pose_factor 添加为一个残差块到优化问题中，关联了初始状态的姿态 statedatalist_[0].pose。
 
-        auto mix_factor = new ImuMixPriorFactor(preintegration_options_, mix_prior_, mix_prior_std_);
-        problem.AddResidualBlock(mix_factor, nullptr, statedatalist_[0].mix);
+        auto mix_factor = new ImuMixPriorFactor(preintegration_options_, mix_prior_, mix_prior_std_);//该对象使用给定的IMU混合状态先验 mix_prior_ 和标准差 mix_prior_std_ 初始化
+        problem.AddResidualBlock(mix_factor, nullptr, statedatalist_[0].mix);//将 mix_factor 添加为一个残差块到优化问题中，关联了初始状态的IMU混合状态 statedatalist_[0].mix。
     }
 }
 
+//将GNSS定位数据作为因子添加到Ceres优化问题中，以优化系统的状态变量，特别是姿态和位置。
 vector<std::pair<ceres::ResidualBlockId, GNSS *>> GVINS::addGnssFactors(ceres::Problem &problem, bool isusekernel) {
+    //ceres::Problem &problem：Ceres优化问题的引用，用于添加残差块。
+    //bool isusekernel：一个布尔值，用于指示是否使用Huber损失函数
+    //vector<std::pair<ceres::ResidualBlockId, GNSS *>>：一个向量，包含添加的每个GNSS定位因子的ResidualBlockId和对应的GNSS数据指针。
+    
     vector<std::pair<ceres::ResidualBlockId, GNSS *>> residual_block;
 
     ceres::LossFunction *loss_function = nullptr;
-    if (isusekernel) {
+    if (isusekernel) {//如果 isusekernel 为真，则创建一个Huber损失函数对象，并将其赋值给
         loss_function = new ceres::HuberLoss(1.0);
-    }
+    }//loss_function。Huber损失函数可以减少离群点的影响，提高优化的鲁棒性。
 
-    for (auto &data : gnsslist_) {
-        int index = getStateDataIndex(data.time);
+    //遍历GNSS数据
+    for (auto &data : gnsslist_) {//gnsslist_ 是存储GNSS数据的容器（假设是一个列表或向量）
+        int index = getStateDataIndex(data.time);//对于每个GNSS数据项 data，使用 getStateDataIndex(data.time) 查找与GNSS时间戳匹配的状态数据的索引
         if (index >= 0) {
-            auto factor = new GnssFactor(data, antlever_);
+            auto factor = new GnssFactor(data, antlever_);//创建一个 GnssFactor 对象 factor，该对象将GNSS数据和天线杠杆臂长度传递给构造函数
             auto id     = problem.AddResidualBlock(factor, loss_function, statedatalist_[index].pose);
+            //将 factor 添加为一个残差块到优化问题中。这个残差块关联了优化变量，这里是 statedatalist_[index].pose，即与GNSS时间戳匹配的状态的姿态变量
             residual_block.push_back(std::make_pair(id, &data));
+            //将 (id, &data) 构造为 std::pair，并将其添加到 residual_block 向量中。这样可以将每个残差块的 ResidualBlockId 与对应的 GNSS 数据指针关联起来。
         }
     }
 
     return residual_block;
+    //返回 residual_block 向量，其中包含了所有添加的GNSS定位因子的信息（包括其 ResidualBlockId 和 GNSS 数据指针）
 }
 
+//设置先验信息来初始化系统的状态估计。这些先验信息将用于约束优化问题，使得在没有足够的观测数据时，系统状态不会偏离得太远。
 void GVINS::constructPrior(bool is_zero_velocity) {
-    double pos_prior_std  = 0.1;                                       // 0.1 m
-    double att_prior_std  = 0.5 * D2R;                                 // 0.5 deg
-    double vel_prior_std  = 0.1;                                       // 0.1 m/s
-    double bg_prior_std   = integration_parameters_->gyr_bias_std * 3; // Bias std * 3
-    double ba_prior_std   = ACCELEROMETER_BIAS_PRIOR_STD;              // 20000 mGal
-    double sodo_prior_std = 0.005;                                     // 5000 PPM
+    //先验标准差设置
+    double pos_prior_std  = 0.1;                                       // 0.1 m。位置先验
+    double att_prior_std  = 0.5 * D2R;                                 // 0.5 deg。姿态先验
+    double vel_prior_std  = 0.1;                                       // 0.1 m/s。速度先验
+    double bg_prior_std   = integration_parameters_->gyr_bias_std * 3; // Bias std * 3。陀螺仪偏置先验
+    double ba_prior_std   = ACCELEROMETER_BIAS_PRIOR_STD;              // 20000 mGal。加速度计偏置先验
+    double sodo_prior_std = 0.005;                                     // 5000 PPM。里程表刻度因子先验
 
-    if (!is_zero_velocity) {
-        bg_prior_std = GYROSCOPE_BIAS_PRIOR_STD; // 7200 deg/hr
-    }
+    //陀螺仪偏置的特殊处理
+    if (!is_zero_velocity) {//如果系统处于静止状态
+        bg_prior_std = GYROSCOPE_BIAS_PRIOR_STD; // 7200 deg/hr。陀螺仪偏置的不确定性设置为一个更高的值
+    }//为了更严格地约束系统在静止时的陀螺仪偏置估计
 
+    //设置先验值
     memcpy(pose_prior_, statedatalist_[0].pose, sizeof(double) * 7);
     memcpy(mix_prior_, statedatalist_[0].mix, sizeof(double) * 18);
+    //从状态数据列表(statedatalist_)中提取第一个状态（初始状态）的位姿和混合状态，并将其复制到先验位姿(pose_prior_)和混合状态(mix_prior_)中。
+    //这里的位姿包含位置和姿态，混合状态包含速度、陀螺仪偏置和加速度计偏置。
+    
+    //设置先验标准差
+    //将先前定义的标准差赋值给相应的先验标准差数组 pose_prior_std_ 和 mix_prior_std_。
     for (size_t k = 0; k < 3; k++) {
+        //pose_prior_std_ 包含了位置和姿态的标准差
         pose_prior_std_[k + 0] = pos_prior_std;
         pose_prior_std_[k + 3] = att_prior_std;
 
+        //mix_prior_std_ 包含了速度、陀螺仪偏置和加速度计偏置的标准差。
         mix_prior_std_[k + 0] = vel_prior_std;
         mix_prior_std_[k + 3] = bg_prior_std;
         mix_prior_std_[k + 6] = ba_prior_std;
     }
-    pose_prior_std_[5] = att_prior_std * 3; // heading
-    mix_prior_std_[9]  = sodo_prior_std;
-    is_use_prior_      = true;
+    pose_prior_std_[5] = att_prior_std * 3; //为了特殊处理航向角（heading），我们将其标准差设定为 att_prior_std 的3倍。
+    mix_prior_std_[9]  = sodo_prior_std;//为了处理里程表刻度因子的标准差，我们将其设置在 mix_prior_std_ 数组的第10个位置（从0开始计数）
+    is_use_prior_      = true;//设置标志 is_use_prior_ 为真，表示系统将使用这些先验信息进行状态估计。
 }
