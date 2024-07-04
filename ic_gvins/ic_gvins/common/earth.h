@@ -20,6 +20,12 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/*
+这个Earth类提供了一系列与地球模型和地理坐标相关的实用函数。
+这些函数包括重力计算、坐标转换、方向余弦矩阵和四元数的生成等，非常适用于地理信息系统(GIS)、
+导航系统以及航空航天领域。
+*/
+
 #ifndef EARTH_H
 #define EARTH_H
 
@@ -44,6 +50,8 @@ class Earth {
 public:
     // 重力计算
     static double gravity(const Vector3d &blh) {
+        //根据WGS84标准计算给定BLH（经纬度和高度）坐标点的重力加速度。
+        //blh中的元素分别代表纬度（弧度），经度（弧度），和高度（米）。
 
         double sin2 = sin(blh[0]);
         sin2 *= sin2;
@@ -52,6 +60,8 @@ public:
                blh[2] * (0.0000000043977311 * sin2 - 0.0000030876910891) + 0.0000000000007211 * blh[2] * blh[2];
     }
 
+    //子午线和卯酉圈的曲率半径
+    //计算子午圈和卯酉圈的曲率半径，输入是纬度，返回一个包含子午圈和卯酉圈曲率半径的Eigen::Vector2d。
     static Eigen::Vector2d meridianPrimeVerticalRadius(double lat) {
         double tmp, sqrttmp;
 
@@ -63,11 +73,15 @@ public:
         return {WGS84_RA * (1 - WGS84_E1) / (sqrttmp * tmp), WGS84_RA / sqrttmp};
     }
 
+    //计算卯酉圈半径
+    //计算给定纬度的卯酉圈半径。
     static double RN(double lat) {
         double sinlat = sin(lat);
         return WGS84_RA / sqrt(1.0 - WGS84_E1 * sinlat * sinlat);
     }
 
+    //方向余弦矩阵 (DCM)
+    //计算东北天坐标系（NED）到地心地固坐标系（ECEF）的方向余弦矩阵（DCM）。
     static Matrix3d cne(const Vector3d &blh) {
         double coslon, sinlon, coslat, sinlat;
 
@@ -92,6 +106,8 @@ public:
         return dcm;
     }
 
+    //坐标转换四元数（从东北天坐标系到地心地固坐标系）
+    //计算东北天坐标系（NED）到地心地固坐标系（ECEF）的四元数。
     static Quaterniond qne(const Vector3d &blh) {
         Quaterniond quat;
 
@@ -110,10 +126,12 @@ public:
         return quat;
     }
 
+    //从四元数到BLH坐标的转换
     static Vector3d blh(const Quaterniond &qne, double height) {
         return {-2 * atan(qne.y() / qne.w()) - M_PI * 0.5, 2 * atan2(qne.z(), qne.w()), height};
     }
 
+    //将BLH坐标转换为ECEF坐标。
     static Vector3d blh2ecef(const Vector3d &blh) {
         double coslat, sinlat, coslon, sinlon;
         double rnh, rn;
@@ -129,6 +147,7 @@ public:
         return {rnh * coslat * coslon, rnh * coslat * sinlon, (rnh - rn * WGS84_E1) * sinlat};
     }
 
+    //将ECEF坐标转换为BLH坐标。该方法通过迭代来逼近计算BLH坐标。
     static Vector3d ecef2blh(const Vector3d &ecef) {
         double p = sqrt(ecef[0] * ecef[0] + ecef[1] * ecef[1]);
         double rn;
@@ -149,6 +168,7 @@ public:
         return {lat, lon, h};
     }
 
+    //DRi和DR矩阵
     static Matrix3d DRi(const Vector3d &blh) {
         Matrix3d dri = Matrix3d::Zero();
 
@@ -171,6 +191,7 @@ public:
         return dr;
     }
 
+    //本地到全局坐标转换
     static Vector3d local2global(const Vector3d &origin, const Vector3d &local) {
 
         Vector3d ecef0 = blh2ecef(origin);
@@ -182,6 +203,7 @@ public:
         return blh1;
     }
 
+    //全局到本地坐标转换
     static Vector3d global2local(const Vector3d &origin, const Vector3d &global) {
         Vector3d ecef0 = blh2ecef(origin);
         Matrix3d cn0e  = cne(origin);
@@ -191,6 +213,7 @@ public:
         return cn0e.transpose() * (ecef1 - ecef0);
     }
 
+    //本地到全局的姿态转换
     static Pose local2global(const Vector3d &origin, const Pose &local) {
         Pose global;
 
@@ -207,7 +230,8 @@ public:
         return global;
     }
 
-    static Pose global2local(const Vector3d &origin, const Pose &global) {
+    //全局到本地的姿态转换
+·   static Pose global2local(const Vector3d &origin, const Pose &global) {
         Pose local;
 
         Vector3d ecef0 = blh2ecef(origin);
@@ -222,20 +246,24 @@ public:
         return local;
     }
 
+    //地球自转速度
     static Vector3d iewe() {
         return {0, 0, WGS84_WIE};
     }
 
+    //在纬度上的地球自转速度
     static Vector3d iewn(double lat) {
         return {WGS84_WIE * cos(lat), 0, -WGS84_WIE * sin(lat)};
     }
 
+    //在本地坐标下的地球自转速度
     static Vector3d iewn(const Vector3d &origin, const Vector3d &local) {
         Vector3d global = local2global(origin, local);
 
         return iewn(global[0]);
     }
 
+    //局部坐标中的角速度
     static Vector3d enwn(const Eigen::Vector2d &rmn, const Vector3d &blh, const Vector3d &vel) {
         return {vel[1] / (rmn[1] + blh[2]), -vel[0] / (rmn[0] + blh[2]), -vel[1] * tan(blh[0]) / (rmn[1] + blh[2])};
     }
