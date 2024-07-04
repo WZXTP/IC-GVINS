@@ -20,6 +20,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/*
+Logging 类是一个用于初始化和管理日志记录功能的实用工具类。
+它整合了 Google 的 glog 库和 Eigen 库，并提供了一些静态方法来处理矩阵的打印和格式化双精度浮点数。
+*/
+
 #ifndef LOGGING_H
 #define LOGGING_H
 
