@@ -20,6 +20,12 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/*
+这段代码定义了一个重投影误差因子 ReprojectionFactor 类，该类继承自
+ceres::SizedCostFunction<2, 7, 7, 7, 1, 1>，用于Ceres求解器中的非线性优化问题。
+该类主要用于计算重投影误差及其对应的雅可比矩阵。
+*/
+
 #ifndef REPROJECTION_FACTOR_H
 #define REPROJECTION_FACTOR_H
 
@@ -33,7 +39,8 @@ using Eigen::Matrix3d;
 using Eigen::Quaterniond;
 using Eigen::Vector3d;
 
-class ReprojectionFactor : public ceres::SizedCostFunction<2, 7, 7, 7, 1, 1> {//定义一个2维残差（即重投影误差）和五组参数的维度
+class ReprojectionFactor : public ceres::SizedCostFunction<2, 7, 7, 7, 1, 1> {
+//定义一个2维残差（即重投影误差）和五组参数的维度
 //第一组参数：7维，参考帧的位姿（位置和四元数）
 //第二组参数：7维，观测帧的位姿
 //第三组参数：7维，相机的外参（位姿）
@@ -103,7 +110,7 @@ public:
             //cb0n，cnb1 和 cbc 是旋转矩阵，用于转换坐标
             Eigen::Matrix3d cb0n = q0.toRotationMatrix();// 世界到参考帧的旋转
             Eigen::Matrix3d cnb1 = q1.toRotationMatrix().transpose();// 当前帧到世界的旋转
-            Eigen::Matrix3d cbc  = qic.toRotationMatrix().transpose();// IMU到相机的旋转
+            Eigen::Matrix3d cbc  = qic.toRotationMatrix().transpose();// IMU 到相机的旋转
             Eigen::Matrix<double, 2, 3> reduce;
             reduce << 1.0 / d1, 0, -pts_1(0) / (d1 * d1), 0, 1.0 / d1, -pts_1(1) / (d1 * d1);
 
@@ -111,12 +118,24 @@ public:
 
             if (jacobians[0]) {//计算参考帧位姿对残差的雅可比矩阵
                 Eigen::Map<Eigen::Matrix<double, 2, 7, Eigen::RowMajor>> jacobian_pose_i(jacobians[0]);
-
+                //jacobian_pose_i 是 jacobians[0] 的映射
+                
+                // 定义一个 3x6 的矩阵 jaco_i，用于存储参考帧位姿对 3D 位置的影响
                 Eigen::Matrix<double, 3, 6> jaco_i;
+                // jaco_i 的左3列表示位置的变化
                 jaco_i.leftCols<3>()  = cbc * cnb1;
+                //cbc 是从相机到IMU的旋转矩阵。
+                //cnb1 是从观测帧到世界坐标系的旋转矩阵的转置。
+                //两者相乘得到从相机坐标系到参考帧坐标系的旋转。
+                
+                // jaco_i 的右3列表示旋转的变化，使用反对称矩阵 (skew-symmetric matrix) 表示旋转
                 jaco_i.rightCols<3>() = -cbc * cnb1 * cb0n * Rotation::skewSymmetric(pts_b_0);
+                //cbc * cnb1 * cb0n 是从相机到世界再到参考帧的旋转。
+                //Rotation::skewSymmetric(pts_b_0) 是参考帧中点 pts_b_0 的反对称矩阵，表示旋转对点位置的影响。
 
-                jacobian_pose_i.leftCols<6>() = reduce * jaco_i;//jacobian_pose_i 是 jacobians[0] 的映射
+                // 将 3x6 的 jaco_i 矩阵乘以 reduce 矩阵以获得 2x6 的雅可比矩阵，并将其赋值给 jacobian_pose_i 的前6列
+                jacobian_pose_i.leftCols<6>() = reduce * jaco_i;
+                // 设置 jacobian_pose_i 的最后一列为零
                 jacobian_pose_i.rightCols<1>().setZero();
             }
 
@@ -124,25 +143,41 @@ public:
                 Eigen::Map<Eigen::Matrix<double, 2, 7, Eigen::RowMajor>> jacobian_pose_j(jacobians[1]);
 
                 Eigen::Matrix<double, 3, 6> jaco_j;
+                // jaco_j 的左3列表示位置的变化
                 jaco_j.leftCols<3>()  = -cbc * cnb1;
+                //cbc 是从相机到IMU的旋转矩阵。
+                //cnb1 是从观测帧到世界坐标系的旋转矩阵的转置。
+                //两者相乘并取负得到从相机坐标系到当前帧坐标系的旋转。
+                
+                // jaco_j 的右3列表示旋转的变化，使用反对称矩阵 (skew-symmetric matrix) 表示旋转
                 jaco_j.rightCols<3>() = cbc * Rotation::skewSymmetric(pts_b_1);
+                
 
+                // 将 3x6 的 jaco_j 矩阵乘以 reduce 矩阵以获得 2x6 的雅可比矩阵，并将其赋值给 jacobian_pose_j 的前6列
                 jacobian_pose_j.leftCols<6>() = reduce * jaco_j;
+                // 设置 jacobian_pose_j 的最后一列为零
                 jacobian_pose_j.rightCols<1>().setZero();
             }
 
             if (jacobians[2]) {//计算相机外参对残差的雅可比矩阵
                 Eigen::Map<Eigen::Matrix<double, 2, 7, Eigen::RowMajor>> jacobian_ex_pose(jacobians[2]);
 
+                // 定义一个 3x6 的矩阵 jaco_ex，用于存储相机外参对 3D 位置的影响
                 Eigen::Matrix<double, 3, 6> jaco_ex;
+                // 计算 jaco_ex 的左3列，考虑相机外参的平移部分
                 jaco_ex.leftCols<3>() = cbc * (cnb1 * cb0n - Eigen::Matrix3d::Identity());
+                
+                // 计算临时旋转矩阵 tmp_r，用于右3列的计算
                 Eigen::Matrix3d tmp_r = cbc * cnb1 * cb0n * cbc.transpose();
 
+                // 计算 jaco_ex 的右3列，考虑相机外参的旋转部分
                 jaco_ex.rightCols<3>() = -tmp_r * Rotation::skewSymmetric(pts_c_0) +
                                          Rotation::skewSymmetric(tmp_r * pts_c_0) +
                                          Rotation::skewSymmetric(cbc * (cnb1 * (cb0n * tic + p0 - p1) - tic));
 
+                // 将 3x6 的 jaco_ex 矩阵乘以 reduce 矩阵以获得 2x6 的雅可比矩阵，并将其赋值给 jacobian_ex_pose 的前6列
                 jacobian_ex_pose.leftCols<6>() = reduce * jaco_ex;
+                // 设置 jacobian_ex_pose 的最后一列为零
                 jacobian_ex_pose.rightCols<1>().setZero();
             }
 
