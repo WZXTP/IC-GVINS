@@ -20,6 +20,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/*
+这段代码定义了一个 TimeCost 类，用于测量事件之间的时间持续时间。它使用 Abseil 库进行高精度的时间记录和格式化。
+*/
+
 #ifndef TIMECOST_H
 #define TIMECOST_H
 
@@ -29,42 +33,42 @@
 class TimeCost {
 
 public:
-    TimeCost() {
+    TimeCost() {//调用 restart 方法初始化计时器。
         restart();
     }
 
-    void restart() {
+    void restart() {//将开始时间设置为当前时间。
         start_     = absl::Now();
-        is_finish_ = false;
+        is_finish_ = false;//重置完成标志。
     }
 
     void finish() {
-        end_       = absl::Now();
-        duration_  = end_ - start_;
-        is_finish_ = true;
+        end_       = absl::Now();//记录结束时间。
+        duration_  = end_ - start_;//计算开始时间和结束时间之间的持续时间。
+        is_finish_ = true;//设置完成标志。
     }
 
     double costInSecond() {
-        if (!is_finish_) {
+        if (!is_finish_) {//如果计时器尚未停止，调用 finish。
             finish();
         }
 
-        return absl::ToDoubleSeconds(duration_);
+        return absl::ToDoubleSeconds(duration_);//返回以秒为单位的持续时间。
     }
 
-    std::string costInSecond(const std::string &header) {
+    std::string costInSecond(const std::string &header) {//返回带有指定标题的以秒为单位的持续时间格式化字符串。
         auto cost = costInSecond();
         return absl::StrFormat("%s %0.6lf seconds", header.c_str(), cost);
     }
 
     double costInMillisecond() {
-        if (!is_finish_) {
+        if (!is_finish_) {//如果计时器尚未停止，调用 finish。
             finish();
         }
-        return absl::ToDoubleMilliseconds(duration_);
+        return absl::ToDoubleMilliseconds(duration_);//返回以毫秒为单位的持续时间。
     }
 
-    std::string costInMillisecond(const std::string &header) {
+    std::string costInMillisecond(const std::string &header) {//返回带有指定标题的以毫秒为单位的持续时间格式化字符串。
         auto cost = costInMillisecond();
         return absl::StrFormat("%s %0.3lf milliseconds", header.c_str(), cost);
     }
@@ -73,7 +77,7 @@ private:
     absl::Time     start_, end_;
     absl::Duration duration_;
 
-    bool is_finish_{false};
+    bool is_finish_{false};//指示计时器是否已停止的标志。
 };
 
 #endif // TIMECOST_H
