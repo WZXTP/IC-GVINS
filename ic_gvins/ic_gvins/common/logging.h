@@ -74,16 +74,16 @@ public:
 
     template <typename T, int Rows, int Cols>
     static void printMatrix(const Eigen::Matrix<T, Rows, Cols> &matrix, const string &prefix = "Matrix: ") {
-        std::cout << prefix << matrix.rows() << "x" << matrix.cols() << std::endl;
-        if (matrix.cols() == 1) {
-            std::cout << matrix.transpose() << std::endl;
+        std::cout << prefix << matrix.rows() << "x" << matrix.cols() << std::endl;//matrix.rows() 和 matrix.cols() 返回矩阵的行数和列数
+        if (matrix.cols() == 1) {//如果矩阵是一列向量
+            std::cout << matrix.transpose() << std::endl;//会被转置
         } else {
-            std::cout << matrix << std::endl;
+            std::cout << matrix << std::endl;//否则直接输出矩阵
         }
     }
 
     static string doubleData(double data) {
-        return absl::StrFormat("%0.6lf", data);
+        return absl::StrFormat("%0.6lf", data);//格式化一个双精度浮点数为一个字符串，保留六位小数。
     }
 
     static void shutdownLogging() {
