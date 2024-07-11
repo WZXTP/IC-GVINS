@@ -30,26 +30,30 @@
 class PreintegrationFactor : public ceres::CostFunction {
 
 public:
+     // 禁用默认构造函数
     PreintegrationFactor() = delete;
 
+    // 显式构造函数，接受一个 PreintegrationBase 的共享指针
     explicit PreintegrationFactor(std::shared_ptr<PreintegrationBase> preintegration)
         : preintegration_(std::move(preintegration)) {
 
-        // parameter
+        // parameter，参数块大小
         *mutable_parameter_block_sizes() = preintegration_->numBlocksParameters();
 
-        // residual
+        // residual，设置残差的数量
         set_num_residuals(preintegration_->numResiduals());
     }
 
+    // 评估函数
     bool Evaluate(const double *const *parameters, double *residuals, double **jacobians) const override {
-        // construct state
+        // construct state，构建状态
         IntegrationState state0, state1;
         preintegration_->constructState(parameters, state0, state1);
 
-        // residual
+        // residual，计算残差
         preintegration_->evaluate(state0, state1, residuals);
 
+        // 如果提供了雅可比矩阵，计算雅可比
         if (jacobians) {
             if (jacobians[0]) {
                 preintegration_->residualJacobianPose0(state0, state1, jacobians[0]);
@@ -69,7 +73,7 @@ public:
     }
 
 private:
-    std::shared_ptr<PreintegrationBase> preintegration_;
+    std::shared_ptr<PreintegrationBase> preintegration_; // 预积分对象的共享指针
 };
 
 #endif // PREINTEGRATION_FACTOR_H
