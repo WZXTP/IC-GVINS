@@ -20,6 +20,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/*
+这段代码定义了一个复杂的预积分类，用于处理地球自转和里程计数据的积分和误差估计，
+提供了多个功能函数和计算方法来实现其功能。
+*/
+
 #ifndef PREINTEGRATION_EARTH_ODO_H
 #define PREINTEGRATION_EARTH_ODO_H
 
@@ -32,7 +37,9 @@ public:
 
     Eigen::MatrixXd evaluate(const IntegrationState &state0, const IntegrationState &state1,
                              double *residuals) override;
+    //重写的虚函数，用于评估预积分结果的残差。
 
+    //这四个函数分别计算姿态0和姿态1的残差雅克比矩阵。
     Eigen::MatrixXd residualJacobianPose0(const IntegrationState &state0, const IntegrationState &state1,
                                           double *jacobian) override;
     Eigen::MatrixXd residualJacobianPose1(const IntegrationState &state0, const IntegrationState &state1,
