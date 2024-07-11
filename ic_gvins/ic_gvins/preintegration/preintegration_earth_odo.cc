@@ -20,6 +20,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/*
+
+*/
+
 #include "preintegration/preintegration_earth_odo.h"
 #include "common/earth.h"
 
@@ -27,10 +31,10 @@ PreintegrationEarthOdo::PreintegrationEarthOdo(std::shared_ptr<IntegrationParame
                                                IntegrationState state)
     : PreintegrationBase(std::move(parameters), imu0, std::move(state)) {
 
-    // Reset state
+    // Reset state，重置状态
     resetState(state, NUM_STATE);
 
-    // Set initial noise matrix
+    // Set initial noise matrix，设置初始噪声矩阵
     setNoiseMatrix();
 
     // 里程计参数
@@ -38,13 +42,19 @@ PreintegrationEarthOdo::PreintegrationEarthOdo(std::shared_ptr<IntegrationParame
     lodo_ = parameters_->lodo;
 }
 
+//该方法用于计算预积分的残差。残差是指两个状态之间的差异，通过预积分过程预测的结果和实际观测的结果之间的误差。
 Eigen::MatrixXd PreintegrationEarthOdo::evaluate(const IntegrationState &state0, const IntegrationState &state1,
                                                  double *residuals) {
+    //state0：初始状态；state1：终止状态；residuals：指向残差数组的指针，用于存储计算得到的残差
+  
+    //初始化。计算信息矩阵的平方根。信息矩阵是协方差矩阵的逆，通过 Cholesky 分解得到平方根矩阵。
     sqrt_information_ =
         Eigen::LLT<Eigen::Matrix<double, NUM_STATE, NUM_STATE>>(covariance_.inverse()).matrixL().transpose();
 
+    //创建残差矩阵映射
     Eigen::Map<Eigen::Matrix<double, NUM_STATE, 1>> residual(residuals);
 
+    //提取雅可比矩阵中与位置、速度、姿态和里程计相关的部分。
     Matrix3d dp_dbg   = jacobian_.block<3, 3>(0, 9);
     Matrix3d dp_dba   = jacobian_.block<3, 3>(0, 12);
     Matrix3d dv_dbg   = jacobian_.block<3, 3>(3, 9);
@@ -53,13 +63,13 @@ Eigen::MatrixXd PreintegrationEarthOdo::evaluate(const IntegrationState &state0,
     Vector3d ds_dsodo = jacobian_.block<3, 1>(15, 18);
     Matrix3d ds_dbg   = jacobian_.block<3, 3>(15, 9);
 
-    // 零偏误差
+    // 计算零偏误差，包括陀螺仪零偏、加速度计零偏和里程计零偏
     Vector3d dbg = state0.bg - delta_state_.bg;
     Vector3d dba = state0.ba - delta_state_.ba;
     double dsodo = state0.sodo - delta_state_.sodo;
 
     // 位置补偿项
-    Vector3d p_cor{0, 0, 0};
+    Vector3d p_cor{0, 0, 0};//初始化位置补偿项
     for (const auto &pn : pn_) {
         p_cor += (pn.second - state0.p) * pn.first;
     }
@@ -86,7 +96,7 @@ Eigen::MatrixXd PreintegrationEarthOdo::evaluate(const IntegrationState &state0,
     Matrix3d cnb0    = qnb0.toRotationMatrix();
     qb0b1_           = state1.q.inverse() * qnn * state0.q;
 
-    // Residuals
+    // Residuals，计算残差矩阵，包括位置、速度、姿态、零偏和里程计的残差
     residual.block<3, 1>(0, 0)  = cnb0 * dpn_ - corrected_p_;
     residual.block<3, 1>(3, 0)  = cnb0 * dvn_ - corrected_v_;
     residual.block<3, 1>(6, 0)  = 2 * (qb0b1_ * corrected_q_).vec();
@@ -95,31 +105,39 @@ Eigen::MatrixXd PreintegrationEarthOdo::evaluate(const IntegrationState &state0,
     residual.block<3, 1>(15, 0) = cnb0 * (state1.p - state0.p) - corrected_s_;
     residual(18)                = state1.sodo - state0.sodo;
 
+    //将残差乘以信息矩阵的平方根，得到加权残差
     residual = sqrt_information_ * residual;
 
     return residual;
 }
 
+//该方法计算了与初始位姿（pose0）相关的残差雅可比矩阵。
 Eigen::MatrixXd PreintegrationEarthOdo::residualJacobianPose0(const IntegrationState &state0,
                                                               const IntegrationState &state1, double *jacobian) {
-    Eigen::Map<Eigen::Matrix<double, NUM_STATE, NUM_POSE, Eigen::RowMajor>> jaco(jacobian);
-    jaco.setZero();
+    Eigen::Map<Eigen::Matrix<double, NUM_STATE, NUM_POSE, Eigen::RowMajor>> jaco(jacobian);//将输入的 jacobian 指针映射为 Eigen 矩阵
+    jaco.setZero();//将雅可比矩阵 jaco 初始化为零矩阵
 
-    Matrix3d cnb0 = state0.q.inverse().toRotationMatrix();
+    Matrix3d cnb0 = state0.q.inverse().toRotationMatrix();//初始位姿四元数的逆变换矩阵
 
-    jaco.block(0, 0, 3, 3) = -cnb0 - 2.0 * cnb0 * iewn_skew_ * delta_time_;
-    jaco.block(0, 3, 3, 3) = Rotation::skewSymmetric(cnb0 * dpn_);
-    jaco.block(3, 0, 3, 3) = -2.0 * cnb0 * iewn_skew_;
-    jaco.block(3, 3, 3, 3) = Rotation::skewSymmetric(cnb0 * dvn_);
+    //位移部分的雅可比矩阵
+    jaco.block(0, 0, 3, 3) = -cnb0 - 2.0 * cnb0 * iewn_skew_ * delta_time_;//对应初始位置相对于位姿的雅可比
+    jaco.block(0, 3, 3, 3) = Rotation::skewSymmetric(cnb0 * dpn_);//对应初始位置相对于姿态的雅可比
+    //速度部分的雅可比矩阵
+    jaco.block(3, 0, 3, 3) = -2.0 * cnb0 * iewn_skew_;//对应初始速度相对于位姿的雅可比
+    jaco.block(3, 3, 3, 3) = Rotation::skewSymmetric(cnb0 * dvn_);//对应初始速度相对于姿态的雅可比
+    //姿态部分的雅可比矩阵
     jaco.block(6, 3, 3, 3) =
         (Rotation::quaternionleft(qb0b1_) * Rotation::quaternionright(corrected_q_)).bottomRightCorner<3, 3>();
+    //里程计部分的雅可比矩阵
     jaco.block(15, 0, 3, 3) = -cnb0;
     jaco.block(15, 3, 3, 3) = Rotation::skewSymmetric(cnb0 * (state1.p - state0.p));
 
+    //加权
     jaco = sqrt_information_ * jaco;
     return jaco;
 }
 
+//该方法计算了与目标位姿（pose1）相关的残差雅可比矩阵
 Eigen::MatrixXd PreintegrationEarthOdo::residualJacobianPose1(const IntegrationState &state0,
                                                               const IntegrationState &state1, double *jacobian) {
     Eigen::Map<Eigen::Matrix<double, NUM_STATE, NUM_POSE, Eigen::RowMajor>> jaco(jacobian);
@@ -127,9 +145,13 @@ Eigen::MatrixXd PreintegrationEarthOdo::residualJacobianPose1(const IntegrationS
 
     Matrix3d cnb0 = state0.q.inverse().toRotationMatrix();
 
+    //位移部分的雅可比矩阵
     jaco.block(0, 0, 3, 3)  = cnb0;
+    //速度部分的雅可比矩阵
     jaco.block(3, 0, 3, 3)  = 2.0 * cnb0 * iewn_skew_;
+    //姿态部分的雅可比矩阵
     jaco.block(6, 3, 3, 3)  = -Rotation::quaternionright(qb0b1_ * corrected_q_).bottomRightCorner<3, 3>();
+    //里程计部分的雅可比矩阵
     jaco.block(15, 0, 3, 3) = cnb0;
 
     jaco = sqrt_information_ * jaco;
@@ -141,6 +163,7 @@ Eigen::MatrixXd PreintegrationEarthOdo::residualJacobianMix0(const IntegrationSt
     Eigen::Map<Eigen::Matrix<double, NUM_STATE, NUM_MIX, Eigen::RowMajor>> jaco(jacobian);
     jaco.setZero();
 
+    //从预积分雅可比矩阵 jacobian_ 中提取的各个块矩阵。
     Matrix3d dp_dbg   = jacobian_.block<3, 3>(0, 9);
     Matrix3d dp_dba   = jacobian_.block<3, 3>(0, 12);
     Matrix3d dv_dbg   = jacobian_.block<3, 3>(3, 9);
@@ -149,17 +172,24 @@ Eigen::MatrixXd PreintegrationEarthOdo::residualJacobianMix0(const IntegrationSt
     Vector3d ds_dsodo = jacobian_.block<3, 1>(15, 18);
     Matrix3d ds_dbg   = jacobian_.block<3, 3>(15, 9);
 
+    //初始位姿四元数的逆变换矩阵
     Matrix3d cnb0 = state0.q.inverse().toRotationMatrix();
 
+    //雅可比矩阵的计算
+    //位移部分的雅可比矩阵
     jaco.block(0, 0, 3, 3)  = -cnb0 * delta_time_;
     jaco.block(0, 3, 3, 3)  = -dp_dbg;
     jaco.block(0, 6, 3, 3)  = -dp_dba;
+    //速度部分的雅可比矩阵
     jaco.block(3, 0, 3, 3)  = -cnb0;
     jaco.block(3, 3, 3, 3)  = -dv_dbg;
     jaco.block(3, 6, 3, 3)  = -dv_dba;
+    //姿态部分的雅可比矩阵
     jaco.block(6, 3, 3, 3)  = Rotation::quaternionleft(qb0b1_ * delta_state_.q).bottomRightCorner<3, 3>() * dq_dbg;
+    //零偏部分的雅可比矩阵
     jaco.block(9, 3, 3, 3)  = -Eigen::Matrix3d::Identity();
     jaco.block(12, 6, 3, 3) = -Eigen::Matrix3d::Identity();
+    //里程计部分的雅可比矩阵
     jaco.block(15, 3, 3, 3) = -ds_dbg;
     jaco.block(15, 9, 3, 1) = -ds_dsodo;
     jaco(18, 9)             = -1.0;
@@ -168,27 +198,33 @@ Eigen::MatrixXd PreintegrationEarthOdo::residualJacobianMix0(const IntegrationSt
     return jaco;
 }
 
+/*这个方法的作用是计算残差雅可比矩阵，该矩阵用于在状态估计优化过程中进行更新和校正。
+通过计算雅可比矩阵，可以更准确地表示状态变量（如速度、角速度零偏、加速度零偏和里程计比例因子）对残差的影响，
+从而提高状态估计的精度。*/
 Eigen::MatrixXd PreintegrationEarthOdo::residualJacobianMix1(const IntegrationState &state0,
                                                              const IntegrationState &state1, double *jacobian) {
     Eigen::Map<Eigen::Matrix<double, NUM_STATE, NUM_MIX, Eigen::RowMajor>> jaco(jacobian);
     jaco.setZero();
 
+    //速度部分的雅可比矩阵
     jaco.block(3, 0, 3, 3)  = state0.q.inverse().toRotationMatrix();
+    //零偏部分的雅可比矩阵
     jaco.block(9, 3, 3, 3)  = Eigen::Matrix3d::Identity();
     jaco.block(12, 6, 3, 3) = Eigen::Matrix3d::Identity();
+    //里程计部分的雅可比矩阵
     jaco(18, 9)             = 1.0;
 
     jaco = sqrt_information_ * jaco;
     return jaco;
 }
 
-int PreintegrationEarthOdo::numResiduals() {
+int PreintegrationEarthOdo::numResiduals() {//返回残差的数量，等于状态变量的数量 NUM_STATE
     return NUM_STATE;
 }
 
-vector<int> PreintegrationEarthOdo::numBlocksParameters() {
+vector<int> PreintegrationEarthOdo::numBlocksParameters() {//返回一个向量，表示每个参数块的大小。
     return std::vector<int>{NUM_POSE, NUM_MIX, NUM_POSE, NUM_MIX};
-}
+}//参数块数量为：初始姿态块、初始混合块、目标姿态块、目标混合块。
 
 IntegrationStateData PreintegrationEarthOdo::stateToData(const IntegrationState &state) {
     IntegrationStateData data;
@@ -196,7 +232,7 @@ IntegrationStateData PreintegrationEarthOdo::stateToData(const IntegrationState 
     data.mix[9] = state.sodo;
 
     return data;
-}
+}//将 IntegrationState 转换为 IntegrationStateData,确保状态和数据之间的一致性。
 
 IntegrationState PreintegrationEarthOdo::stateFromData(const IntegrationStateData &data) {
     IntegrationState state;
@@ -204,8 +240,9 @@ IntegrationState PreintegrationEarthOdo::stateFromData(const IntegrationStateDat
     state.sodo = data.mix[9];
 
     return state;
-}
+}//将 IntegrationStateData 转换为 IntegrationState。
 
+//通过将参数数组中的数据映射到 IntegrationState 的各个属性上，能够有效地构建状态对象。
 void PreintegrationEarthOdo::constructState(const double *const *parameters, IntegrationState &state0,
                                             IntegrationState &state1) {
     state0 = IntegrationState{
@@ -227,7 +264,10 @@ void PreintegrationEarthOdo::constructState(const double *const *parameters, Int
     };
 }
 
+/*这段代码展示了 IMU 数据预积分的完整过程，包括位置、速度、姿态的更新，以及系统状态的预积分更新。
+通过零偏补偿、时间累积、位置速度积分、姿态积分和预积分更新，实现了系统状态的精确估计。*/
 void PreintegrationEarthOdo::integrationProcess(unsigned long index) {
+    // 对当前和前一个 IMU 数据进行零偏补偿，分别得到 imu_pre 和 imu_cur。
     IMU imu_pre = compensationBias(imu_buffer_[index - 1]);
     IMU imu_cur = compensationBias(imu_buffer_[index]);
 
@@ -250,6 +290,7 @@ void PreintegrationEarthOdo::integrationProcess(unsigned long index) {
     Vector3d dnn    = -iewn_ * dt;
     Quaterniond qnn = Rotation::rotvec2quaternion(dnn);
 
+    //计算速度增量 dvel
     Vector3d dvel =
         0.5 * (Matrix3d::Identity() + qnn.toRotationMatrix()) * current_state_.q.toRotationMatrix() * dvfb + dv_cor_g;
 
@@ -261,7 +302,7 @@ void PreintegrationEarthOdo::integrationProcess(unsigned long index) {
     pn_.emplace_back(std::make_pair(dt, current_state_.p));
 
     // 姿态
-    Vector3d dtheta = imu_cur.dtheta + 1.0 / 12.0 * imu_pre.dtheta.cross(imu_cur.dtheta);
+    Vector3d dtheta = imu_cur.dtheta + 1.0 / 12.0 * imu_pre.dtheta.cross(imu_cur.dtheta);//计算角速度增量
 
     current_state_.q = qnn * current_state_.q * Rotation::rotvec2quaternion(dtheta);
     current_state_.q.normalize();
@@ -297,15 +338,17 @@ void PreintegrationEarthOdo::resetState(const IntegrationState &state) {
 void PreintegrationEarthOdo::updateJacobianAndCovariance(const IMU &imu_pre, const IMU &imu_cur) {
     // dp, dv, dq, dbg, dba
 
-    Eigen::MatrixXd phi = Eigen::MatrixXd::Zero(NUM_STATE, NUM_STATE);
+    Eigen::MatrixXd phi = Eigen::MatrixXd::Zero(NUM_STATE, NUM_STATE);//初始化 phi 矩阵为零矩阵
 
-    double dt = imu_cur.dt;
+    double dt = imu_cur.dt;//获取当前IMU数据的时间间隔 dt
 
+    //计算地球自转角度 dnn 和旋转矩阵 cbb0
     Vector3d dnn  = -iewn_ * delta_time_;
     Matrix3d cbb0 = -(q0_.inverse() * Rotation::rotvec2quaternion(dnn) * q0_ * delta_state_.q).toRotationMatrix();
 
     // jacobian
 
+    //更新雅可比矩阵
     // phi = I + F * dt
     phi.block<3, 3>(0, 0)   = Matrix3d::Identity();
     phi.block<3, 3>(0, 3)   = Matrix3d::Identity() * dt;
@@ -317,6 +360,7 @@ void PreintegrationEarthOdo::updateJacobianAndCovariance(const IMU &imu_pre, con
     phi.block<3, 3>(9, 9)   = Matrix3d::Identity() * (1 - dt / parameters_->corr_time);
     phi.block<3, 3>(12, 12) = Matrix3d::Identity() * (1 - dt / parameters_->corr_time);
 
+    //更新 phi 矩阵的里程相关部分
     Vector3d dsodo  = Vector3d(imu_cur.odovel, 0, 0);
     Vector3d stheta = cvb_ * dsodo * (1 + delta_state_.sodo) - imu_cur.dtheta.cross(lodo_);
 
@@ -330,8 +374,10 @@ void PreintegrationEarthOdo::updateJacobianAndCovariance(const IMU &imu_pre, con
 
     // covariance
 
+    //初始化噪声矩阵 gt 为零矩阵
     Eigen::MatrixXd gt = Eigen::MatrixXd::Zero(NUM_STATE, NUM_NOISE);
 
+    //更新噪声矩阵 gt
     gt.block<3, 3>(3, 3)   = cbb0;
     gt.block<3, 3>(6, 0)   = -Matrix3d::Identity();
     gt.block<3, 3>(9, 6)   = Matrix3d::Identity();
@@ -340,12 +386,15 @@ void PreintegrationEarthOdo::updateJacobianAndCovariance(const IMU &imu_pre, con
     gt.block<3, 3>(15, 12) = cbb0 * cvb_ * (1 + delta_state_.sodo);
     gt(18, 15)             = 1.0;
 
+    //计算协方差增量 Qk
     Eigen::MatrixXd Qk =
         0.5 * dt * (phi * gt * noise_ * gt.transpose() + gt * noise_ * gt.transpose() * phi.transpose());
+    //更新协方差矩阵
     covariance_ = phi * covariance_ * phi.transpose() + Qk;
 }
 
 void PreintegrationEarthOdo::resetState(const IntegrationState &state, int num) {
+    //重置时间和状态变量
     delta_time_ = 0;
     delta_state_.p.setZero();
     delta_state_.q.setIdentity();
@@ -355,31 +404,35 @@ void PreintegrationEarthOdo::resetState(const IntegrationState &state, int num) 
     delta_state_.ba   = state.ba;
     delta_state_.sodo = state.sodo;
 
+    //重置雅克比和协方差矩阵
     jacobian_.setIdentity(num, num);
     covariance_.setZero(num, num);
 
-    // 预积分起点的绝对姿态
+    // 预积分起点的绝对姿态，设置初始绝对姿态 (q0_)
     q0_ = current_state_.q;
 
     // 地球自转, 近似使用初始时刻位置
     iewn_      = Earth::iewn(parameters_->station, current_state_.p);
     iewn_skew_ = Rotation::skewSymmetric(iewn_);
 
+    //清空缓存的 IMU 位置 (pn_)
     pn_.clear();
 }
 
+//设置噪声协方差矩阵 noise_，根据预先定义的参数计算和设定各个噪声分量的方差。
 void PreintegrationEarthOdo::setNoiseMatrix() {
-    noise_.setIdentity(NUM_NOISE, NUM_NOISE);
-    noise_.block<3, 3>(0, 0) *= parameters_->gyr_arw * parameters_->gyr_arw; // nw
-    noise_.block<3, 3>(3, 3) *= parameters_->acc_vrw * parameters_->acc_vrw; // na
+    noise_.setIdentity(NUM_NOISE, NUM_NOISE);//初始化矩阵
+    //设置各个噪声分量的方差
+    noise_.block<3, 3>(0, 0) *= parameters_->gyr_arw * parameters_->gyr_arw; // 角速率噪声 nw
+    noise_.block<3, 3>(3, 3) *= parameters_->acc_vrw * parameters_->acc_vrw; // 角速度噪声 na
     noise_.block<3, 3>(6, 6) *=
-        2 * parameters_->gyr_bias_std * parameters_->gyr_bias_std / parameters_->corr_time; // nbg
+        2 * parameters_->gyr_bias_std * parameters_->gyr_bias_std / parameters_->corr_time; // 陀螺仪偏差噪声 nbg
     noise_.block<3, 3>(9, 9) *=
-        2 * parameters_->acc_bias_std * parameters_->acc_bias_std / parameters_->corr_time; // nba
-    noise_(12, 12) *= parameters_->odo_std[0] * parameters_->odo_std[0];                    // nodo
+        2 * parameters_->acc_bias_std * parameters_->acc_bias_std / parameters_->corr_time; // 加速度计偏差噪声 nba
+    noise_(12, 12) *= parameters_->odo_std[0] * parameters_->odo_std[0];                    // 里程计噪声 nodo
     noise_(13, 13) *= parameters_->odo_std[1] * parameters_->odo_std[1];                    // nodo
     noise_(14, 14) *= parameters_->odo_std[2] * parameters_->odo_std[2];                    // nodo
-    noise_(15, 15) *= parameters_->odo_srw * parameters_->odo_srw;                          // nsodo
+    noise_(15, 15) *= parameters_->odo_srw * parameters_->odo_srw;                          // 里程计速度偏差噪声 nsodo
 }
 
 int PreintegrationEarthOdo::numMixParametersBlocks() {
