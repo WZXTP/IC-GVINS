@@ -31,6 +31,7 @@ using cv::Mat;
 class Frame;
 class MapPoint;
 
+//定义了一个枚举类型 FeatureType，表示特征点的类型，包括未知特征、匹配特征、三角化特征和深度关联特征。
 enum FeatureType {
     FEATURE_NONE             = -1,
     FEATURE_MATCHED          = 0,
@@ -41,8 +42,9 @@ enum FeatureType {
 class Feature {
 
 public:
-    typedef std::shared_ptr<Feature> Ptr;
+    typedef std::shared_ptr<Feature> Ptr;// Ptr 定义了一个智能指针类型，用于管理 Feature 对象的生命周期。
 
+//构造函数 Feature 接受帧对象的共享指针、速度向量、关键点、畸变关键点和特征类型作为参数，初始化对象。
     Feature() = delete;
     Feature(const std::shared_ptr<Frame> &frame, const Eigen::Vector2d &velocity, cv::Point2f keypoint,
             cv::Point2f distorted, FeatureType type)
@@ -57,6 +59,7 @@ public:
         velocity_[2] = 0;
     }
 
+//公共成员函数包括获取帧和地图点的函数、获取关键点和畸变关键点的函数、设置关联地图点和异常状态、获取特征类型和像素速度等。
     static std::shared_ptr<Feature> createFeature(const std::shared_ptr<Frame> &frame, const Eigen::Vector2d &velocity,
                                                   const cv::Point2f &keypoint, const cv::Point2f &distorted,
                                                   FeatureType type) {
@@ -115,6 +118,6 @@ private:
     bool isoutlier_;
 
     FeatureType type_;
-};
+};//私有成员变量包括帧和地图点的弱指针、关键点和畸变关键点、速度向量、异常状态和特征类型。
 
 #endif // GVINS_FEATURE_H
