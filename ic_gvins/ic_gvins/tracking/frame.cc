@@ -20,18 +20,21 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/*用于表示帧数据和处理帧相关的操作。*/
+
 #include "tracking/frame.h"
 
+// 初始化了 Frame 类的对象
 Frame::Frame(ulong id, double stamp, Mat image)
-    : id_(id)
-    , keyframe_id_(0)
-    , stamp_(stamp)
-    , image_(std::move(image))
-    , iskeyframe_(false) {
+    : id_(id) // 帧的唯一标识符
+    , keyframe_id_(0) // 关键帧的唯一标识符
+    , stamp_(stamp) //时间戳，用于标识帧的时间。
+    , image_(std::move(image)) //帧的图像数据，通过移动语义 std::move(image) 初始化。
+    , iskeyframe_(false) { // 表示是否为关键帧，初始为 false。
     features_.clear();
     unupdated_mappoints_.clear();
 
-    image_.copyTo(raw_image_);
+    image_.copyTo(raw_image_); // 复制原始图像数据
 }
 
 Frame::Ptr Frame::createFrame(double stamp, const Mat &image) {
@@ -40,12 +43,14 @@ Frame::Ptr Frame::createFrame(double stamp, const Mat &image) {
     return std::make_shared<Frame>(factory_id++, stamp, image);
 }
 
+// 用于设置当前帧为关键帧
 void Frame::setKeyFrame(int state) {
-    std::unique_lock<std::mutex> lock(frame_mutex_);
+    std::unique_lock<std::mutex> lock(frame_mutex_);//获取帧对象的互斥锁，确保在设置关键帧状态时线程安全。
 
-    static ulong keyframe_factory_id = 0;
+    static ulong keyframe_factory_id = 0;// 静态变量，用于生成唯一的关键帧标识符
 
-    if (!iskeyframe_) {
+    // 检查当前帧是否已经被标记为关键帧
+    if (!iskeyframe_) { //如果当前帧不是关键帧
         iskeyframe_     = true;
         keyframe_id_    = keyframe_factory_id++;
         keyframe_state_ = state;
