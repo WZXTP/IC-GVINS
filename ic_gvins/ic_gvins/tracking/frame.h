@@ -33,11 +33,11 @@
 using cv::Mat;
 using std::vector;
 
-enum keyFrameState {
-    KEYFRAME_NONE              = 0,
-    KEYFRAME_REMOVE_SECOND_NEW = 1,
-    KEYFRAME_NORMAL            = 2,
-    KEYFRAME_REMOVE_OLDEST     = 3,
+enum keyFrameState { // 关键帧的状态
+    KEYFRAME_NONE              = 0, // 无特殊状态
+    KEYFRAME_REMOVE_SECOND_NEW = 1, // 删除第二新的关键帧
+    KEYFRAME_NORMAL            = 2, // 正常关键帧
+    KEYFRAME_REMOVE_OLDEST     = 3, // 删除最老的关键帧
 };
 
 class Frame {
@@ -48,17 +48,18 @@ public:
     Frame() = delete;
     Frame(ulong id, double stamp, Mat image);
 
-    static Frame::Ptr createFrame(double stamp, const Mat &image);
+    static Frame::Ptr createFrame(double stamp, const Mat &image);//静态成员函数，用于创建并返回帧对象的智能指针。
 
-    void setKeyFrame(int state);
+    void setKeyFrame(int state);//设置当前帧为关键帧，并指定关键帧状态 state
 
-    void resetKeyFrame() {
+    void resetKeyFrame() {//重置当前帧的关键帧状态为默认状态 KEYFRAME_NONE。
         std::unique_lock<std::mutex> lock(frame_mutex_);
 
         iskeyframe_     = false;
         keyframe_state_ = KEYFRAME_NONE;
     }
 
+    //返回当前帧的图像数据和原始图像数据的引用。
     Mat &image() {
         return image_;
     }
@@ -67,6 +68,7 @@ public:
         return raw_image_;
     }
 
+    //获取和设置当前帧的位姿信息。
     Pose pose() {
         std::unique_lock<std::mutex> lock(frame_mutex_);
         return pose_;
@@ -77,54 +79,59 @@ public:
         pose_ = std::move(pose);
     }
 
-    std::unordered_map<ulong, Feature::Ptr> features() {
+    std::unordered_map<ulong, Feature::Ptr> features() {//返回当前帧的特征点映射，使用 std::mutex 保护多线程访问。
         std::unique_lock<std::mutex> lock(frame_mutex_);
         return features_;
     }
 
-    void clearFeatures() {
+    void clearFeatures() {//清空当前帧的特征点和未更新地图点。
         std::unique_lock<std::mutex> lock(frame_mutex_);
 
         features_.clear();
         unupdated_mappoints_.clear();
     }
 
-    size_t numFeatures() {
+    size_t numFeatures() {//返回当前帧特征点的数量。
         std::unique_lock<std::mutex> lock(frame_mutex_);
 
         return features_.size();
     }
 
-    const std::vector<std::shared_ptr<MapPoint>> &unupdatedMappoints() {
+    const std::vector<std::shared_ptr<MapPoint>> &unupdatedMappoints() {//返回未更新的地图点向量。
         std::unique_lock<std::mutex> lock(frame_mutex_);
 
         return unupdated_mappoints_;
     }
 
+    //向未更新的地图点向量中添加新的地图点。
     void addNewUnupdatedMappoint(const std::shared_ptr<MapPoint> &mappoint) {
         std::unique_lock<std::mutex> lock(frame_mutex_);
 
         unupdated_mappoints_.push_back(mappoint);
     }
 
+    //添加特定地图点 ID 和特征点智能指针到特征点映射中。
     void addFeature(ulong mappointid, const Feature::Ptr &features) {
         std::unique_lock<std::mutex> lock(frame_mutex_);
 
         features_.insert(make_pair(mappointid, features));
     }
 
+    //获取和设置帧的时间戳。
     double stamp() const {
         return stamp_;
     }
-
+    
     void setStamp(double stamp) {
         stamp_ = stamp;
     }
 
+    //函数返回帧的时间延迟 
     double timeDelay() const {
         return td_;
     }
 
+    //设置帧的时间延迟
     void setTimeDelay(double td) {
         td_ = td;
     }
@@ -141,6 +148,7 @@ public:
         return keyframe_id_;
     }
 
+    //设置帧的关键帧状态 
     void setKeyFrameState(int state) {
         std::unique_lock<std::mutex> lock(frame_mutex_);
 
@@ -154,24 +162,25 @@ public:
     }
 
 private:
-    int keyframe_state_{KEYFRAME_NORMAL};
+    int keyframe_state_{KEYFRAME_NORMAL}; // 关键帧的状态
 
-    std::mutex frame_mutex_;
+    std::mutex frame_mutex_; // 互斥锁，用于保护帧对象的线程安全访问。
 
+    // 帧的唯一标识符和关键帧的唯一标识符。
     ulong id_;
     ulong keyframe_id_;
 
-    double stamp_;
-    double td_{0};
+    double stamp_;// 时间戳
+    double td_{0};// 时间延迟
 
-    Pose pose_;
+    Pose pose_;// 帧的位姿
 
-    Mat image_, raw_image_;
+    Mat image_, raw_image_;// 帧的图像数据和原始图像数据
 
-    bool iskeyframe_;
+    bool iskeyframe_;// 标记当前帧是否为关键帧
 
-    std::unordered_map<ulong, Feature::Ptr> features_;
-    vector<std::shared_ptr<MapPoint>> unupdated_mappoints_;
+    std::unordered_map<ulong, Feature::Ptr> features_;// 存储帧特征点的映射
+    vector<std::shared_ptr<MapPoint>> unupdated_mappoints_;// 存储未更新的地图点的向量
 };
 
 #endif // GVINS_FRAME_H
