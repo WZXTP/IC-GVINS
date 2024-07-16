@@ -20,6 +20,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/*
+目的是提供一个抽象接口，供具体的绘制器类（派生类）实现，在SLAM系统中用于管理和绘制地图数据、
+帧信息以及跟踪结果的可视化信息。通过纯虚函数和智能指针的使用，实现了面向对象的灵活性和资源管理。
+*/
+
 #ifndef GVINS_DRAWER_H
 #define GVINS_DRAWER_H
 
@@ -31,9 +36,9 @@
 class Drawer {
 
 public:
-    typedef std::shared_ptr<Drawer> Ptr;
+    typedef std::shared_ptr<Drawer> Ptr;// 定义了一个智能指针类型 Ptr，用于管理 Drawer 对象的生命周期。
 
-    virtual ~Drawer() = default;
+    virtual ~Drawer() = default;// 定义了虚析构函数，确保通过基类指针删除派生类对象时正确释放资源。
 
     virtual void run()         = 0;
     virtual void setFinished() = 0;
