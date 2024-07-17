@@ -40,12 +40,14 @@ Tracking::Tracking(Camera::Ptr camera, Map::Ptr map, Drawer::Ptr drawer, const s
     , isinitializing_(true)
     , histogram_(0) {
 
+    //日志文件保存器
     logfilesaver_ = FileSaver::create(outputpath + "/tracking.txt", 3);
-    if (!logfilesaver_->isOpen()) {
+    if (!logfilesaver_->isOpen()) {//尝试打开日志文件，如果失败则记录错误日志并返回。
         LOGE << "Failed to open data file";
         return;
     }
 
+    //加载配置文件
     YAML::Node config;
     std::vector<double> vecdata;
     config = YAML::LoadFile(configfile);
@@ -54,8 +56,9 @@ Tracking::Tracking(Camera::Ptr camera, Map::Ptr map, Drawer::Ptr drawer, const s
     track_min_parallax_    = config["track_min_parallax"].as<double>();
     track_max_features_    = config["track_max_features"].as<int>();
     track_max_interval_    = config["track_max_interval"].as<double>();
-    track_max_interval_ *= 0.95; // 错开整时间间隔
+    track_max_interval_ *= 0.95; // 错开整时间间隔，避免整时间间隔的冲突
 
+    //参数初始化，初始化可视化标志和重投影误差标准差
     is_use_visualization_   = config["is_use_visualization"].as<bool>();
     reprojection_error_std_ = config["reprojection_error_std"].as<double>();
 
@@ -63,99 +66,113 @@ Tracking::Tracking(Camera::Ptr camera, Map::Ptr map, Drawer::Ptr drawer, const s
     clahe_ = cv::createCLAHE(3.0, cv::Size(21, 21));
 
     // 分块索引
-    block_cols_ = static_cast<int>(lround(camera_->width() / TRACK_BLOCK_SIZE));
-    block_rows_ = static_cast<int>(lround(camera_->height() / TRACK_BLOCK_SIZE));
-    block_cnts_ = block_cols_ * block_rows_;
+    //计算图像块的列数和行数
+    block_cols_ = static_cast<int>(lround(camera_->width() / TRACK_BLOCK_SIZE));//块的列数
+    block_rows_ = static_cast<int>(lround(camera_->height() / TRACK_BLOCK_SIZE));//块的行数
+    block_cnts_ = block_cols_ * block_rows_;//块的总数量，即列数和行数的乘积
 
+    //计算每个块的大小
     int col, row;
-    row = camera_->height() / block_rows_;
-    col = camera_->width() / block_cols_;
-    block_indexs_.emplace_back(std::make_pair(col, row));
+    row = camera_->height() / block_rows_;//每个块的高度，即图像高度除以块的行数。
+    col = camera_->width() / block_cols_;//每个块的宽度，即图像宽度除以块的列数。
+    block_indexs_.emplace_back(std::make_pair(col, row));//初始化第一个块的索引位置
+    //计算并存储所有块的索引位置
     for (int i = 0; i < block_rows_; i++) {
         for (int j = 0; j < block_cols_; j++) {
             block_indexs_.emplace_back(std::make_pair(col * j, row * i));
         }
     }
 
-    // 每个分块提取的角点数量
+    // 特征提取参数
+    // 每个分块提取的角点数量，计算每个块提取的最大特征数
     track_max_block_features_ =
         static_cast<int>(lround(static_cast<double>(track_max_features_) / static_cast<double>(block_cnts_)));
 
-    // 每个格子的提取特征数量平方面积为格子面积的 2/3
+    // 每个格子的提取特征数量平方面积为格子面积的 2/3，计算每个块内特征点的最小像素距离
     track_min_pixel_distance_ = static_cast<int>(round(TRACK_BLOCK_SIZE / sqrt(track_max_block_features_ * 1.5)));
 }
 
+//计算输入图像的直方图，并通过直方图的加权和计算一个归一化的值
 double Tracking::calculateHistigram(const Mat &image) {
-    Mat histogram;
-    int channels[]         = {0};
-    int histsize           = 256;
-    float range[]          = {0, 256};
-    const float *histrange = {range};
-    bool uniform = true, accumulate = false;
+    // 直方图计算
+    Mat histogram;//用于存储直方图数据
+    int channels[]         = {0};//channels 数组指定要处理的图像通道，这里是第一个通道（灰度图像）
+    int histsize           = 256;//指定直方图的大小，这里是 256 个 bin
+    float range[]          = {0, 256};//像素值的范围
+    const float *histrange = {range};//histrange 指针指向 range 数组。
+    bool uniform = true, accumulate = false;//直方图是否均匀以及是否累积
 
-    cv::calcHist(&image, 1, channels, Mat(), histogram, 1, &histsize, &histrange, uniform, accumulate);
+    cv::calcHist(&image, 1, channels, Mat(), histogram, 1, &histsize, &histrange, uniform, accumulate);//使用 OpenCV 的 calcHist 函数计算直方图，存储在 histogram 中。
 
+    //计算加权直方图和
     double hist = 0;
-    for (int k = 0; k < 256; k++) {
+    for (int k = 0; k < 256; k++) {//遍历所有的 bin（共 256 个），计算每个 bin 的值乘以对应的权重（即 bin 的索引值除以 256），并累加到 hist 中。
         hist += histogram.at<float>(k) * (float) k / 256.0;
     }
-    hist /= (image.cols * image.rows);
+    hist /= (image.cols * image.rows);//除以图像的总像素数进行归一化
 
     return hist;
 }
 
+// 图像预处理
 bool Tracking::preprocessing(Frame::Ptr frame) {
+    //初始化新关键帧标志
     isnewkeyframe_ = false;
 
     // 彩色转灰度
-    if (frame->image().channels() == 3) {
+    if (frame->image().channels() == 3) {//如果输入帧的图像是彩色图像（即有三个通道）
         cv::cvtColor(frame->image(), frame->image(), cv::COLOR_BGR2GRAY);
     }
 
+    //直方图检查
     if (track_check_histogram_) {
         // 计算直方图参数
-        double hist = calculateHistigram(frame->image());
-        if (histogram_ != 0) {
-            double rate = fabs((hist - histogram_) / histogram_);
+        double hist = calculateHistigram(frame->image());//计算当前帧的直方图参数
+        if (histogram_ != 0) {//如果前一帧的直方图参数 histogram_ 不为零
+            double rate = fabs((hist - histogram_) / histogram_);//计算当前帧和前一帧的直方图变化率
 
             // 图像直方图变化比例大于10%, 则跳过当前帧
             if (rate > 0.1) {
                 LOGW << "Histogram change too large at " << Logging::doubleData(frame->stamp()) << " with " << rate;
                 passed_cnt_++;
 
-                if (passed_cnt_ > 1) {
+                if (passed_cnt_ > 1) {//如果连续跳过超过 1 帧，重置直方图参数。
                     histogram_ = 0;
                 }
                 return false;
             }
         }
-        histogram_ = hist;
+        histogram_ = hist;//更新直方图参数 
     }
 
+    //更新当前帧
     frame_pre_ = frame_cur_;
     frame_cur_ = std::move(frame);
 
-    // 直方图均衡化
+    // 直方图均衡化。对当前帧图像应用自适应直方图均衡化（CLAHE）进行图像增强。
     clahe_->apply(frame_cur_->image(), frame_cur_->image());
 
     return true;
 }
 
+//特征跟踪
 TrackState Tracking::track(Frame::Ptr frame) {
     // Tracking
 
-    timecost_.restart();
+    //初始化
+    timecost_.restart();//重新启动计时器
 
-    TrackState track_state = TRACK_PASSED;
+    TrackState track_state = TRACK_PASSED;//初始化跟踪状态
 
     // 预处理
-    if (!preprocessing(std::move(frame))) {
+    if (!preprocessing(std::move(frame))) {//对输入帧进行预处理，如果预处理失败，直接返回当前状态
         return track_state;
     }
 
+    初始化阶段
     if (isinitializing_) {
         // Initialization
-        if (frame_ref_ == nullptr) {
+        if (frame_ref_ == nullptr) {//如果参考帧为空，重置跟踪，设置当前帧为参考帧，检测特征，并返回 TRACK_FIRST_FRAME。
             doResetTracking();
 
             frame_ref_ = frame_cur_;
@@ -165,7 +182,7 @@ TrackState Tracking::track(Frame::Ptr frame) {
             return TRACK_FIRST_FRAME;
         }
 
-        if (pts2d_ref_.empty()) {
+        if (pts2d_ref_.empty()) {//如果参考帧的特征点为空，再次检测特征。
             featuresDetection(frame_ref_, false);
         }
 
