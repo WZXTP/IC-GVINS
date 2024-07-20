@@ -997,13 +997,14 @@ double Tracking::keyPointParallax(const cv::Point2f &pp0, const cv::Point2f &pp1
 // 计算从参考帧到当前帧的视差均值，这可以用来评估特征点的深度和三维重建的准确性。
 int Tracking::parallaxFromReferenceMapPoints(double &parallax) {
 
-    parallax      = 0;
-    int counts    = 0;
+    // 初始化
+    parallax      = 0;//存储计算得到的总视差值
+    int counts    = 0;//记录有效的视差点对数量
     auto features = frame_ref_->features();
 
-    for (auto &feature : features) {
+    for (auto &feature : features) {// 遍历参考帧的所有特征点
         auto mappoint = feature.second->getMapPoint();
-        if (mappoint && !mappoint->isOutlier()) {
+        if (mappoint && !mappoint->isOutlier()) { // 检查每个特征点是否有有效的路标点，并且这些路标点不是异常点
             // 取最新的一个路标点观测
             auto observations = mappoint->observations();
             if (observations.empty()) {
@@ -1016,29 +1017,35 @@ int Tracking::parallaxFromReferenceMapPoints(double &parallax) {
                     // 对应同一路标点在当前帧的像素观测
                     parallax += keyPointParallax(feature.second->keyPoint(), feat->keyPoint(), frame_ref_->pose(),
                                                  frame_cur_->pose());
+                    // 计算参考帧和当前帧中相同路标点的视差，并累加到 parallax 中
                     counts++;
                 }
             }
         }
     }
 
+    // 计算平均视差
     if (counts != 0) {
         parallax /= counts;
     }
 
-    return counts;
+    return counts; // 返回有效点对数量
 }
 
+// 计算从参考帧到当前帧的特征点视差，并返回视差的平均值。它适用于具有一组参考和当前特征点的情况，并检查这些特征点是否在当前帧和参考帧中匹配。
 int Tracking::parallaxFromReferenceKeyPoints(const vector<cv::Point2f> &ref, const vector<cv::Point2f> &cur,
                                              double &parallax) {
+    // 初始化
     parallax   = 0;
     int counts = 0;
-    for (size_t k = 0; k < pts2d_ref_frame_.size(); k++) {
-        if (pts2d_ref_frame_[k] == frame_ref_) {
+    for (size_t k = 0; k < pts2d_ref_frame_.size(); k++) { // 遍历所有参考帧中的特征点
+        if (pts2d_ref_frame_[k] == frame_ref_) {// 检查特征点是否属于当前参考帧
             parallax += keyPointParallax(ref[k], cur[k], frame_ref_->pose(), frame_cur_->pose());
+            // 计算参考帧和当前帧中对应特征点的视差，并累加到 parallax 中。
             counts++;
         }
     }
+    // 计算平均视差
     if (counts != 0) {
         parallax /= counts;
     }
