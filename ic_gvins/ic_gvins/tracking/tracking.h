@@ -36,11 +36,11 @@
 #include <fstream>
 
 typedef enum TrackState {
-    TRACK_FIRST_FRAME,
-    TRACK_INITIALIZING,
-    TRACK_TRACKING,
-    TRACK_PASSED,
-    TRACK_LOST,
+    TRACK_FIRST_FRAME,//系统正在处理第一帧图像
+    TRACK_INITIALIZING,//系统正在初始化过程中
+    TRACK_TRACKING,//系统正在正常跟踪
+    TRACK_PASSED,//系统已成功完成某个跟踪任务或阶段
+    TRACK_LOST,//系统失去了跟踪
 } TrackState;
 
 class Tracking {
@@ -52,51 +52,51 @@ public:
 
     TrackState track(Frame::Ptr frame);
 
-    bool isNewKeyFrame() const {
+    bool isNewKeyFrame() const { // 判断当前帧是否为新关键帧
         return isnewkeyframe_;
     }
 
     bool isGoodToTrack(const cv::Point2f &pp, const Pose &pose, const Vector3d &pw, double scale,
-                       double depth_scale = 1.0);
-    static Eigen::Matrix4d pose2Tcw(const Pose &pose);
+                       double depth_scale = 1.0); // 检查一个特征点是否适合追踪
+    static Eigen::Matrix4d pose2Tcw(const Pose &pose); // 将位姿转换为相机坐标系
 
 private:
     void showTracking();
 
-    bool preprocessing(Frame::Ptr frame);
-    static double calculateHistigram(const Mat &image);
+    bool preprocessing(Frame::Ptr frame); // 进行帧的预处理
+    static double calculateHistigram(const Mat &image); // 计算图像直方图
 
-    void makeNewFrame(int state);
-    void writeLoggingMessage();
+    void makeNewFrame(int state); // 生成新帧
+    void writeLoggingMessage(); // 记录日志信息
 
-    bool doResetTracking();
+    bool doResetTracking(); // 进行重置追踪操作
 
-    static bool isGoodDepth(double depth, double scale = 1.0);
+    static bool isGoodDepth(double depth, double scale = 1.0); // 检查深度是否合理
 
-    bool trackReferenceFrame();
-    bool trackMappoint();
+    bool trackReferenceFrame(); // 追踪参考帧
+    bool trackMappoint(); // 追踪地图点
 
-    double relativeTranslation();
-    double relativeRotation();
+    double relativeTranslation(); // 计算相对平移
+    double relativeRotation(); // 计算相对旋转
 
-    keyFrameState checkKeyFrameSate();
+    keyFrameState checkKeyFrameSate(); // 检查关键帧状态
 
     int parallaxFromReferenceKeyPoints(const vector<cv::Point2f> &ref, const vector<cv::Point2f> &cur,
                                        double &parallax);
     int parallaxFromReferenceMapPoints(double &parallax);
 
-    double keyPointParallax(const cv::Point2f &pp0, const cv::Point2f &pp1, const Pose &pose0, const Pose &pose1);
+    double keyPointParallax(const cv::Point2f &pp0, const cv::Point2f &pp1, const Pose &pose0, const Pose &pose1);// 计算关键点视差
 
-    void featuresDetection(Frame::Ptr &frame, bool ismask = true);
+    void featuresDetection(Frame::Ptr &frame, bool ismask = true);//检测特征点
 
-    bool triangulation();
+    bool triangulation();//进行三角化
     static void triangulatePoint(const Eigen::Matrix<double, 3, 4> &pose0, const Eigen::Matrix<double, 3, 4> &pose1,
-                                 const Eigen::Vector3d &pc0, const Eigen::Vector3d &pc1, Eigen::Vector3d &pw);
+                                 const Eigen::Vector3d &pc0, const Eigen::Vector3d &pc1, Eigen::Vector3d &pw);//三角化一个点
 
-    bool isOnBorder(const cv::Point2f &pts);
-    static double ptsDistance(cv::Point2f &pt1, cv::Point2f &pt2);
+    bool isOnBorder(const cv::Point2f &pts);//检查点是否在图像边界上
+    static double ptsDistance(cv::Point2f &pt1, cv::Point2f &pt2);//计算两个点之间的距离
 
-    template <typename T> static void reduceVector(T &vec, vector<uint8_t> status);
+    template <typename T> static void reduceVector(T &vec, vector<uint8_t> status);//压缩向量
 
 public:
     // 三点平面拟合的最大深度差异
